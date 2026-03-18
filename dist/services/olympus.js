@@ -1,7 +1,7 @@
 import { ApiError, requestText } from '../lib/http.js';
 const OLYMPUS_BASE_URL = 'https://olympusbiblioteca.com';
 const OLYMPUS_DASHBOARD_BASE_URL = 'https://dashboard.olympusbiblioteca.com';
-const OLYMPUS_NOTICE = 'Olympus queda integrado desde tu backend local. Si esta misma fuente se consulta desde Render puede fallar por bloqueo del servidor remoto.';
+const OLYMPUS_NOTICE = 'Olympus integrado desde la API publica del sitio. La lectura usa el endpoint real de capitulos para evitar hojas incompletas.';
 const OLYMPUS_HEADERS = {
     Accept: 'application/json, text/plain, */*',
     Referer: `${OLYMPUS_BASE_URL}/`,
@@ -509,48 +509,75 @@ function resolveNuxtValue(payload, value, stack = new Set()) {
     }
     return value;
 }
-function getPayloadUrl(options) {
-    const payloadUrl = options.payloadUrl?.trim();
-    if (payloadUrl) {
-        return payloadUrl;
+function getChapterTarget(options) {
+    const requestedType = options.type?.trim() || 'comic';
+    if (options.chapterId?.trim() && options.slug?.trim()) {
+        const chapterId = options.chapterId.trim();
+        const slug = options.slug.trim();
+        const chapterUrl = buildOlympusChapterUrl(slug, chapterId);
+        const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL);
+        apiUrl.searchParams.set('type', requestedType);
+        return {
+            chapterId,
+            slug,
+            type: requestedType,
+            chapterUrl,
+            apiUrl: apiUrl.toString(),
+        };
     }
-    const chapterUrl = options.chapterUrl?.trim();
-    if (chapterUrl) {
-        const url = new URL(chapterUrl);
-        url.pathname = `${url.pathname.replace(/\/$/, '')}/_payload.json`;
-        return url.toString();
-    }
-    const chapterId = options.chapterId?.trim();
-    const slug = options.slug?.trim();
-    const type = options.type?.trim() || 'comic';
-    if (!chapterId || !slug) {
+    const rawUrl = options.chapterUrl?.trim() || options.payloadUrl?.trim();
+    if (!rawUrl) {
         throw new ApiError('Debes enviar payloadUrl, chapterUrl o chapterId + slug para consultar Olympus.', 400);
     }
-    return `${OLYMPUS_BASE_URL}/capitulo/${chapterId}/${type}-${slug}/_payload.json`;
-}
-function getChapterUrl(payloadUrl) {
-    const url = new URL(payloadUrl);
-    url.pathname = url.pathname.replace(/\/_payload\.json$/, '');
-    url.search = '';
-    return url.toString();
-}
-function getRouteData(payload) {
-    const root = resolveNuxtValue(payload, payload[0]);
-    if (!root || typeof root !== 'object' || !('data' in root)) {
-        throw new ApiError('Olympus respondio con un payload invalido.', 502);
+    const parsed = new URL(rawUrl);
+    const pathname = parsed.pathname.replace(/\/_payload\.json$/, '').replace(/\/$/, '');
+    const match = pathname.match(/^\/capitulo\/([^/]+)\/([^/]+)$/i);
+    if (!match) {
+        throw new ApiError('La ruta del capitulo de Olympus no es valida.', 400);
     }
-    const routeMap = root.data;
-    if (!routeMap || typeof routeMap !== 'object' || Array.isArray(routeMap)) {
-        throw new ApiError('Olympus no devolvio la ruta esperada.', 502);
+    const [, chapterId, routeSlug] = match;
+    let type = requestedType;
+    let slug = routeSlug;
+    const routeMatch = routeSlug.match(/^([a-z]+)-(.+)$/i);
+    if (routeMatch) {
+        const [, detectedType, detectedSlug] = routeMatch;
+        if (!options.type?.trim()) {
+            type = detectedType.toLowerCase();
+        }
+        if (detectedType.toLowerCase() === type.toLowerCase()) {
+            slug = detectedSlug;
+        }
     }
-    const [routePath, routeData] = Object.entries(routeMap)[0] ?? [];
-    if (!routePath || !routeData || typeof routeData !== 'object' || Array.isArray(routeData)) {
-        throw new ApiError('No se pudieron resolver los datos del capitulo en Olympus.', 502);
-    }
+    const chapterUrl = buildSiteUrl(pathname);
+    const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL);
+    apiUrl.searchParams.set('type', type);
     return {
-        routePath,
-        routeData: routeData,
+        chapterId,
+        slug,
+        type,
+        chapterUrl,
+        apiUrl: apiUrl.toString(),
     };
+}
+async function requestOlympusSiteJson(url, signal) {
+    const response = await fetch(url, {
+        headers: OLYMPUS_HEADERS,
+        signal,
+    });
+    if (!response.ok) {
+        let message = response.statusText || 'Olympus respondio con un error.';
+        try {
+            const payload = (await response.json());
+            if (payload.message) {
+                message = payload.message;
+            }
+        }
+        catch {
+            // noop
+        }
+        throw new ApiError(message, response.status);
+    }
+    return (await response.json());
 }
 function buildSeriesRouteSlug(type, seriesSlug) {
     if (!seriesSlug) {
@@ -562,33 +589,29 @@ function buildSeriesRouteSlug(type, seriesSlug) {
     return seriesSlug.startsWith(`${type}-`) ? seriesSlug : `${type}-${seriesSlug}`;
 }
 export async function getOlympusChapterData(options, signal) {
-    const payloadUrl = getPayloadUrl(options);
-    const response = await requestText(payloadUrl, signal, {
-        headers: OLYMPUS_HEADERS,
-    });
-    let payload;
-    try {
-        payload = JSON.parse(response.bodyText);
-    }
-    catch {
-        throw new ApiError('Olympus devolvio un payload que no se pudo interpretar.', 502);
-    }
-    if (!Array.isArray(payload) || payload.length === 0) {
-        throw new ApiError('Olympus devolvio un payload vacio o invalido.', 502);
-    }
-    const { routePath, routeData } = getRouteData(payload);
-    const chapter = (routeData.chapter ?? null);
-    const comic = (routeData.comic ?? null);
-    const prevChapter = (routeData.prev_chapter ?? null);
-    const nextChapter = (routeData.next_chapter ?? null);
+    const target = getChapterTarget(options);
+    const payload = await requestOlympusSiteJson(target.apiUrl, signal);
+    const chapter = payload.chapter ?? null;
+    const comic = payload.comic ?? null;
+    const prevChapter = payload.prev_chapter ?? null;
+    const nextChapter = payload.next_chapter ?? null;
     if (!chapter) {
         throw new ApiError('Olympus no devolvio la informacion del capitulo.', 502);
     }
-    const recommendedSeries = Array.isArray(chapter.recommended_series)
-        ? chapter.recommended_series
-        : [];
-    const chapterType = readText(chapter.type);
-    const seriesSlug = readText(comic?.slug);
+    let recommendedSeries = [];
+    if (Array.isArray(chapter.recommended_series)) {
+        recommendedSeries = chapter.recommended_series;
+    }
+    else if (typeof chapter.recommended_series === 'string' && chapter.recommended_series.trim()) {
+        try {
+            recommendedSeries = JSON.parse(chapter.recommended_series);
+        }
+        catch {
+            recommendedSeries = [];
+        }
+    }
+    const chapterType = readText(chapter.type) ?? target.type;
+    const seriesSlug = readText(comic?.slug) ?? target.slug;
     const seriesName = readText(comic?.name);
     const seriesRouteSlug = buildSeriesRouteSlug(chapterType, seriesSlug);
     const chapterTitle = readText(chapter.title) ?? readText(chapter.name);
@@ -600,9 +623,9 @@ export async function getOlympusChapterData(options, signal) {
         : [];
     return {
         source: 'olympus',
-        payloadUrl,
-        routePath,
-        chapterUrl: getChapterUrl(payloadUrl),
+        payloadUrl: target.apiUrl,
+        routePath: new URL(target.chapterUrl).pathname,
+        chapterUrl: target.chapterUrl,
         chapter: {
             id: chapter.id ?? '',
             number: chapterNumber,
@@ -650,18 +673,19 @@ export async function getOlympusChapterData(options, signal) {
             if (!item || typeof item !== 'object') {
                 return null;
             }
-            const recommendedSlug = readText(item.slug);
-            const recommendedType = readText(item.type);
-            const recommendedName = readText(item.name);
+            const candidate = item;
+            const recommendedSlug = readText(candidate.slug);
+            const recommendedType = readText(candidate.type);
+            const recommendedName = readText(candidate.name);
             if (!recommendedSlug || !recommendedName) {
                 return null;
             }
             return {
-                id: item.id ?? '',
+                id: candidate.id ?? '',
                 name: recommendedName,
                 slug: recommendedSlug,
-                status: readName(item.status),
-                cover: readText(item.cover),
+                status: readName(candidate.status),
+                cover: readText(candidate.cover),
                 type: recommendedType,
                 url: buildSiteUrl(`/series/${buildSeriesRouteSlug(recommendedType, recommendedSlug) ?? recommendedSlug}`),
             };
