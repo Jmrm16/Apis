@@ -1,4 +1,5 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
+import { getTmoChapterPages } from '../services/tmo.js';
 function toPositiveNumber(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -64,6 +65,12 @@ export const apiRoutes = async (app) => {
     });
     app.get('/anime/:slug/episode/:number', async (request, reply) => {
         const data = await provider.getEpisodeByNumber(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/chapter-pages', async (request, reply) => {
+        const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || '';
+        const referer = request.query.referer?.trim() || request.query.urlRefer?.trim();
+        const data = await getTmoChapterPages(chapterUrl, referer, request.signal);
         return reply.send({ success: true, data });
     });
 };

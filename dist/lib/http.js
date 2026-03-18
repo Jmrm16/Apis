@@ -36,3 +36,14 @@ export async function requestJson(baseUrl, path, signal, init) {
     }
     return payload.data;
 }
+export async function requestText(url, signal, init) {
+    const response = await fetch(url, {
+        ...init,
+        signal,
+    });
+    if (!response.ok) {
+        throw new ApiError(response.statusText || 'La pagina externa respondio con un error.', response.status);
+    }
+    const bodyText = await response.text();
+    return Object.assign(response, { bodyText });
+}

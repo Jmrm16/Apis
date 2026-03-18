@@ -52,3 +52,25 @@ export async function requestJson<T>(
 
   return payload.data
 }
+
+export async function requestText(
+  url: string,
+  signal?: AbortSignal,
+  init?: RequestInit,
+): Promise<Response & { bodyText: string }> {
+  const response = await fetch(url, {
+    ...init,
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new ApiError(
+      response.statusText || 'La pagina externa respondio con un error.',
+      response.status,
+    )
+  }
+
+  const bodyText = await response.text()
+
+  return Object.assign(response, { bodyText })
+}

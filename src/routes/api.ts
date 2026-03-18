@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
+import { getTmoChapterPages } from '../services/tmo.js'
 import type {
   AnimeStatusCode,
   SearchOrder,
@@ -16,6 +17,13 @@ interface SearchFilterBody {
   genres?: string[]
   statuses?: AnimeStatusCode[]
   types?: string[]
+}
+
+interface TmoChapterPagesQuerystring {
+  chapterUrl?: string
+  referer?: string
+  urlPage?: string
+  urlRefer?: string
 }
 
 function toPositiveNumber(value: string | undefined, fallback: number): number {
@@ -111,6 +119,19 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         toPositiveNumber(request.params.number, 1),
         request.signal,
       )
+
+      return reply.send({ success: true, data })
+    },
+  )
+
+  app.get<{ Querystring: TmoChapterPagesQuerystring }>(
+    '/manga/chapter-pages',
+    async (request, reply) => {
+      const chapterUrl =
+        request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || ''
+      const referer = request.query.referer?.trim() || request.query.urlRefer?.trim()
+
+      const data = await getTmoChapterPages(chapterUrl, referer, request.signal)
 
       return reply.send({ success: true, data })
     },
