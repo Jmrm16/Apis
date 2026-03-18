@@ -1,0 +1,69 @@
+import { getAvailableProviders, getProvider } from '../providers/index.js';
+function toPositiveNumber(value, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+function buildSearchParams(query, body) {
+    return {
+        query: query.query?.trim() ?? '',
+        page: toPositiveNumber(query.page, 1),
+        order: query.order ?? 'default',
+        genres: body?.genres ?? [],
+        statuses: body?.statuses ?? [],
+        types: body?.types ?? [],
+    };
+}
+export const apiRoutes = async (app) => {
+    const provider = getProvider();
+    app.get('/health', async () => ({
+        success: true,
+        data: {
+            ok: true,
+            provider: provider.key,
+        },
+    }));
+    app.get('/providers', async () => ({
+        success: true,
+        data: {
+            current: provider.key,
+            available: getAvailableProviders(),
+        },
+    }));
+    app.get('/home', async (_, reply) => {
+        const [latestEpisodes, onAir] = await Promise.all([
+            provider.getLatestEpisodes(),
+            provider.getOnAir(),
+        ]);
+        return reply.send({
+            success: true,
+            data: {
+                latestEpisodes,
+                onAir,
+            },
+        });
+    });
+    app.get('/list/latest-episodes', async (_, reply) => {
+        const latestEpisodes = await provider.getLatestEpisodes();
+        return reply.send({ success: true, data: latestEpisodes });
+    });
+    app.get('/list/animes-on-air', async (_, reply) => {
+        const onAir = await provider.getOnAir();
+        return reply.send({ success: true, data: onAir });
+    });
+    app.get('/search', async (request, reply) => {
+        const data = await provider.search(buildSearchParams(request.query), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.post('/search/by-filter', async (request, reply) => {
+        const data = await provider.search(buildSearchParams(request.query, request.body), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/anime/:slug', async (request, reply) => {
+        const data = await provider.getAnimeBySlug(request.params.slug, request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/anime/:slug/episode/:number', async (request, reply) => {
+        const data = await provider.getEpisodeByNumber(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+};
