@@ -1,10 +1,481 @@
 import { ApiError, requestText } from '../lib/http.js';
 const OLYMPUS_BASE_URL = 'https://olympusbiblioteca.com';
+const OLYMPUS_DASHBOARD_BASE_URL = 'https://dashboard.olympusbiblioteca.com';
+const OLYMPUS_NOTICE = 'Olympus queda integrado desde tu backend local. Si esta misma fuente se consulta desde Render puede fallar por bloqueo del servidor remoto.';
 const OLYMPUS_HEADERS = {
     Accept: 'application/json, text/plain, */*',
     Referer: `${OLYMPUS_BASE_URL}/`,
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
 };
+const OLYMPUS_HTML_HEADERS = {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Referer: `${OLYMPUS_BASE_URL}/`,
+    'User-Agent': OLYMPUS_HEADERS['User-Agent'],
+};
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const FULL_CATALOG_TTL_MS = 10 * 60 * 1000;
+const FULL_CATALOG_BATCH_SIZE = 6;
+const CHAPTERS_BATCH_SIZE = 4;
+const seriesPageCache = new Map();
+const seriesDetailCache = new Map();
+const seriesChaptersCache = new Map();
+let recentSeriesCache = null;
+let fullCatalogCache = null;
+function getCacheValue(entry) {
+    if (!entry) {
+        return null;
+    }
+    if (entry.expiresAt <= Date.now()) {
+        return null;
+    }
+    return entry.value;
+}
+function setCacheValue(value, ttlMs = CACHE_TTL_MS) {
+    return {
+        expiresAt: Date.now() + ttlMs,
+        value,
+    };
+}
+function normalizeWhitespace(value) {
+    return value.replace(/\s+/g, ' ').trim();
+}
+function readText(value) {
+    return typeof value === 'string' && value.trim() ? normalizeWhitespace(value) : null;
+}
+function readName(value) {
+    if (typeof value === 'string') {
+        return value.trim() || null;
+    }
+    if (value && typeof value === 'object' && 'name' in value) {
+        return readText(value.name);
+    }
+    return null;
+}
+function readNumber(value, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+function toIdString(value) {
+    const text = String(value ?? '').trim();
+    return text || '0';
+}
+function ensureUrlPath(value) {
+    return value.startsWith('/') ? value : `/${value}`;
+}
+function buildSiteUrl(path) {
+    return new URL(ensureUrlPath(path), OLYMPUS_BASE_URL).toString();
+}
+function buildOlympusSourceUrl(slug) {
+    return buildSiteUrl(`/series/comic-${slug}`);
+}
+function buildOlympusChapterUrl(slug, chapterId) {
+    return buildSiteUrl(`/capitulo/${chapterId}/comic-${slug}`);
+}
+function decodeHtmlAttribute(value) {
+    return value
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
+}
+function buildOlympusSynopsis(summary) {
+    const normalized = normalizeWhitespace(summary ?? '');
+    if (!normalized) {
+        return 'Abre la ficha para cargar la sinopsis real desde Olympus.';
+    }
+    return normalized.length > 260 ? `${normalized.slice(0, 260).trim()}...` : normalized;
+}
+function padChapterNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? String(parsed).padStart(2, '0') : value;
+}
+function chapterSortValue(value, id) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+        return parsed;
+    }
+    return Number(id) || Number.MAX_SAFE_INTEGER;
+}
+function dedupeSummaries(items) {
+    const unique = new Map();
+    for (const item of items) {
+        unique.set(`${item.libraryType}:${item.id}:${item.slug}`, item);
+    }
+    return Array.from(unique.values());
+}
+function dedupeRecentChapters(items) {
+    const unique = new Map();
+    for (const item of items) {
+        if (!unique.has(item.mangaId)) {
+            unique.set(item.mangaId, item);
+        }
+    }
+    return Array.from(unique.values());
+}
+function mapOlympusSeriesToSummary(series) {
+    const id = toIdString(series.id);
+    const title = normalizeWhitespace(series.name);
+    const chapterCount = readNumber(series.chapter_count);
+    return {
+        id,
+        slug: series.slug,
+        libraryType: 'comic',
+        title,
+        cover: readText(series.cover) ?? '',
+        synopsis: 'Abre la ficha para cargar la sinopsis real desde Olympus.',
+        status: readName(series.status) ?? 'Sin estado',
+        demography: 'Comic',
+        rating: '',
+        genres: [],
+        chapterCount,
+        sourceUrl: buildOlympusSourceUrl(series.slug),
+        source: 'olympus',
+    };
+}
+function mapOlympusDetailToSummary(detail) {
+    return {
+        id: toIdString(detail.id),
+        slug: detail.slug,
+        libraryType: 'comic',
+        title: normalizeWhitespace(detail.name),
+        cover: readText(detail.cover) ?? '',
+        synopsis: buildOlympusSynopsis(detail.summary),
+        status: readName(detail.status) ?? 'Sin estado',
+        demography: detail.genres?.[0] ? normalizeWhitespace(detail.genres[0].name) : 'Comic',
+        rating: String(readNumber(detail.like_count || detail.view_count)),
+        genres: (detail.genres ?? [])
+            .map((genre) => readText(genre.name))
+            .filter((genre) => Boolean(genre)),
+        chapterCount: readNumber(detail.chapter_count),
+        sourceUrl: buildOlympusSourceUrl(detail.slug),
+        source: 'olympus',
+    };
+}
+function createOlympusChapterSummary(manga, chapter) {
+    const id = toIdString(chapter.id);
+    const number = normalizeWhitespace(chapter.name);
+    return {
+        id,
+        slug: `chapter-${id}`,
+        title: `${manga.title} - Capitulo ${number}`,
+        numberLabel: `Capitulo ${padChapterNumber(number)}`,
+        shortTitle: `Capitulo ${number}`,
+        cover: manga.cover,
+        sourceUrl: buildOlympusChapterUrl(manga.slug, id),
+    };
+}
+function mapRecommendedSeries(value) {
+    let parsed = [];
+    if (typeof value === 'string' && value.trim()) {
+        try {
+            parsed = JSON.parse(value);
+        }
+        catch {
+            parsed = [];
+        }
+    }
+    else if (Array.isArray(value)) {
+        parsed = value;
+    }
+    return dedupeSummaries(parsed.map((item) => mapOlympusSeriesToSummary(item)));
+}
+async function requestOlympusJson(path, searchParams, signal) {
+    const url = new URL(path, OLYMPUS_DASHBOARD_BASE_URL);
+    for (const [key, value] of Object.entries(searchParams)) {
+        if (value !== undefined && value !== null && `${value}`.trim()) {
+            url.searchParams.set(key, String(value));
+        }
+    }
+    const response = await fetch(url, {
+        headers: OLYMPUS_HEADERS,
+        signal,
+    });
+    if (!response.ok) {
+        let message = response.statusText || 'Olympus respondio con un error.';
+        try {
+            const payload = (await response.json());
+            if (payload.message) {
+                message = payload.message;
+            }
+        }
+        catch {
+            // noop
+        }
+        throw new ApiError(message, response.status);
+    }
+    return (await response.json());
+}
+async function getOlympusSeriesPage(page = 1, signal) {
+    const cacheKey = `series-page:${page}`;
+    const cached = getCacheValue(seriesPageCache.get(cacheKey));
+    if (cached) {
+        return cached;
+    }
+    const payload = await requestOlympusJson('/api/series', {
+        page,
+        direction: 'desc',
+        type: 'comic',
+    }, signal);
+    const value = {
+        items: payload.data.series.data.map((item) => mapOlympusSeriesToSummary(item)),
+        recommended: mapRecommendedSeries(payload.data.recommended_series),
+        currentPage: payload.data.series.current_page,
+        lastPage: payload.data.series.last_page,
+        total: payload.data.series.total,
+    };
+    seriesPageCache.set(cacheKey, setCacheValue(value));
+    return value;
+}
+async function getOlympusSeriesDetailRaw(slug, signal) {
+    const cacheKey = `series-detail:${slug}`;
+    const cached = getCacheValue(seriesDetailCache.get(cacheKey));
+    if (cached) {
+        return cached;
+    }
+    const payload = await requestOlympusJson(`/api/series/${encodeURIComponent(slug)}`, { type: 'comic' }, signal);
+    seriesDetailCache.set(cacheKey, setCacheValue(payload.data));
+    return payload.data;
+}
+async function getOlympusSeriesChaptersPage(slug, page, signal) {
+    return requestOlympusJson(`/api/series/${encodeURIComponent(slug)}/chapters`, {
+        page,
+        direction: 'desc',
+        type: 'comic',
+    }, signal);
+}
+async function getOlympusAllSeriesChapters(manga, signal) {
+    const cacheKey = `series-chapters:${manga.slug}`;
+    const cached = getCacheValue(seriesChaptersCache.get(cacheKey));
+    if (cached) {
+        return cached;
+    }
+    const firstPage = await getOlympusSeriesChaptersPage(manga.slug, 1, signal);
+    const rawChapters = [...firstPage.data];
+    if (firstPage.meta.last_page > 1) {
+        for (let start = 2; start <= firstPage.meta.last_page; start += CHAPTERS_BATCH_SIZE) {
+            if (signal?.aborted) {
+                throw new ApiError('La solicitud fue cancelada.', 499);
+            }
+            const batchPages = Array.from({ length: Math.min(CHAPTERS_BATCH_SIZE, firstPage.meta.last_page - start + 1) }, (_, index) => start + index);
+            const batch = await Promise.all(batchPages.map((page) => getOlympusSeriesChaptersPage(manga.slug, page, signal)));
+            for (const page of batch) {
+                rawChapters.push(...page.data);
+            }
+        }
+    }
+    const chapters = rawChapters
+        .map((chapter) => createOlympusChapterSummary(manga, chapter))
+        .sort((left, right) => {
+        return (chapterSortValue(left.shortTitle.replace(/^Capitulo\s+/i, ''), left.id) -
+            chapterSortValue(right.shortTitle.replace(/^Capitulo\s+/i, ''), right.id));
+    });
+    seriesChaptersCache.set(cacheKey, setCacheValue(chapters));
+    return chapters;
+}
+function extractMangaIdFromCover(cover, fallbackSlug) {
+    const match = cover.match(/\/storage\/comics\/covers\/(\d+)\//i);
+    return match?.[1] ?? fallbackSlug;
+}
+function parseRecentChapterGroups(html) {
+    const groups = html
+        .split('<div class="bg-gray-800 p-4 rounded-xl relative">')
+        .slice(1)
+        .map((chunk) => {
+        const seriesMatch = chunk.match(/href="\/series\/comic-([^"]+)"[\s\S]*?src="([^"]+)"[\s\S]*?alt="([^"]+)"/i);
+        if (!seriesMatch) {
+            return null;
+        }
+        const [, slug, rawCover, title] = seriesMatch;
+        const cover = decodeHtmlAttribute(rawCover);
+        const mangaId = extractMangaIdFromCover(cover, slug);
+        const manga = {
+            id: mangaId,
+            slug,
+            libraryType: 'comic',
+            title: normalizeWhitespace(title),
+            cover,
+            synopsis: 'Abre la ficha para cargar la sinopsis real desde Olympus.',
+            status: 'Sin estado',
+            demography: 'Comic',
+            rating: '',
+            genres: [],
+            chapterCount: 0,
+            sourceUrl: buildOlympusSourceUrl(slug),
+            source: 'olympus',
+        };
+        const chapterPattern = /href="\/capitulo\/(\d+)\/comic-[^"]+"[\s\S]*?<div class="chapter-name[^"]*"[^>]*>\s*Capítulo\s*([^<]+)<\/div>[\s\S]*?<time datetime="([^"]+)"[^>]*>([^<]+)<\/time>/gi;
+        const chapters = [];
+        let match;
+        while ((match = chapterPattern.exec(chunk))) {
+            const [, chapterId, chapterNumber, , relativeTime] = match;
+            const cleanNumber = normalizeWhitespace(chapterNumber);
+            chapters.push({
+                mangaId,
+                mangaSlug: slug,
+                mangaTitle: manga.title,
+                libraryType: 'comic',
+                chapterId,
+                chapterSlug: `chapter-${chapterId}`,
+                chapterTitle: normalizeWhitespace(relativeTime),
+                numberLabel: `Capitulo ${padChapterNumber(cleanNumber)}`,
+                cover,
+                sourceUrl: buildOlympusChapterUrl(slug, chapterId),
+            });
+        }
+        if (chapters.length === 0) {
+            return null;
+        }
+        return {
+            manga,
+            chapters,
+        };
+    })
+        .filter((group) => Boolean(group));
+    return groups;
+}
+async function getOlympusRecentChapterGroups(signal) {
+    const cached = getCacheValue(recentSeriesCache);
+    if (cached) {
+        return cached;
+    }
+    const response = await requestText(`${OLYMPUS_BASE_URL}/capitulos`, signal, {
+        headers: OLYMPUS_HTML_HEADERS,
+    });
+    const groups = parseRecentChapterGroups(response.bodyText);
+    recentSeriesCache = setCacheValue(groups);
+    return groups;
+}
+async function getOlympusFullCatalog(signal) {
+    const cached = getCacheValue(fullCatalogCache);
+    if (cached) {
+        return cached;
+    }
+    const firstPage = await getOlympusSeriesPage(1, signal);
+    const items = [...firstPage.items];
+    if (firstPage.lastPage > 1) {
+        for (let start = 2; start <= firstPage.lastPage; start += FULL_CATALOG_BATCH_SIZE) {
+            if (signal?.aborted) {
+                throw new ApiError('La solicitud fue cancelada.', 499);
+            }
+            const batchPages = Array.from({ length: Math.min(FULL_CATALOG_BATCH_SIZE, firstPage.lastPage - start + 1) }, (_, index) => start + index);
+            const batch = await Promise.all(batchPages.map((page) => getOlympusSeriesPage(page, signal)));
+            for (const page of batch) {
+                items.push(...page.items);
+            }
+        }
+    }
+    const deduped = dedupeSummaries(items);
+    fullCatalogCache = setCacheValue(deduped, FULL_CATALOG_TTL_MS);
+    return deduped;
+}
+export function isOlympusMangaLibrary(libraryType) {
+    return libraryType.trim().toLowerCase() === 'comic';
+}
+export async function getOlympusMangaHome(signal) {
+    const [seriesPage, recentGroups] = await Promise.all([
+        getOlympusSeriesPage(1, signal),
+        getOlympusRecentChapterGroups(signal),
+    ]);
+    const featuredSeed = recentGroups[0]?.manga ?? seriesPage.items[0];
+    if (!featuredSeed) {
+        throw new ApiError('Olympus no devolvio series para la portada.', 502);
+    }
+    const featuredDetail = await getOlympusSeriesDetailRaw(featuredSeed.slug, signal);
+    const featured = mapOlympusDetailToSummary(featuredDetail);
+    const fallbackPage = seriesPage.lastPage > 1 && (seriesPage.items.length < 18 || seriesPage.recommended.length < 12)
+        ? await getOlympusSeriesPage(2, signal)
+        : null;
+    const recentChapters = dedupeRecentChapters(recentGroups.flatMap((group) => group.chapters)).slice(0, 18);
+    const trending = dedupeSummaries([
+        featured,
+        ...seriesPage.items.filter((item) => item.slug !== featured.slug),
+        ...(fallbackPage?.items ?? []).filter((item) => item.slug !== featured.slug),
+    ]).slice(0, 18);
+    const spotlight = dedupeSummaries([
+        ...seriesPage.recommended,
+        ...(fallbackPage?.recommended ?? []),
+        ...seriesPage.items,
+        ...(fallbackPage?.items ?? []),
+    ])
+        .filter((item) => item.slug !== featured.slug)
+        .slice(0, 12);
+    return {
+        featured,
+        trending,
+        latestChapters: recentChapters,
+        spotlight,
+        source: 'olympus',
+        notice: OLYMPUS_NOTICE,
+    };
+}
+export async function searchOlympusManga(query, signal) {
+    const cleanQuery = query.trim().toLowerCase();
+    if (!cleanQuery) {
+        const preview = await getOlympusSeriesPage(1, signal);
+        return dedupeSummaries(preview.items).slice(0, 24);
+    }
+    const catalog = await getOlympusFullCatalog(signal);
+    return catalog.filter((manga) => {
+        return (manga.title.toLowerCase().includes(cleanQuery) ||
+            manga.slug.toLowerCase().includes(cleanQuery) ||
+            manga.synopsis.toLowerCase().includes(cleanQuery));
+    });
+}
+export async function getOlympusMangaDetail(libraryType, id, slug, signal) {
+    if (!isOlympusMangaLibrary(libraryType)) {
+        throw new ApiError('La serie no pertenece a Olympus.', 404);
+    }
+    const [detailRaw, seriesPage] = await Promise.all([
+        getOlympusSeriesDetailRaw(slug, signal),
+        getOlympusSeriesPage(1, signal),
+    ]);
+    const summary = mapOlympusDetailToSummary(detailRaw);
+    if (toIdString(detailRaw.id) !== id.trim()) {
+        throw new ApiError('La serie solicitada no coincide con Olympus.', 404);
+    }
+    const chapters = await getOlympusAllSeriesChapters(summary, signal);
+    const related = dedupeSummaries(seriesPage.recommended.filter((item) => item.id !== summary.id)).slice(0, 8);
+    return {
+        ...summary,
+        description: buildOlympusSynopsis(detailRaw.summary),
+        alternativeTitles: detailRaw.note ? [normalizeWhitespace(detailRaw.note)] : [],
+        chapters,
+        related,
+        notice: OLYMPUS_NOTICE,
+    };
+}
+export async function getOlympusMangaReadData(libraryType, id, slug, chapterId, signal) {
+    if (!isOlympusMangaLibrary(libraryType)) {
+        throw new ApiError('La serie no pertenece a Olympus.', 404);
+    }
+    const detailRaw = await getOlympusSeriesDetailRaw(slug, signal);
+    const summary = mapOlympusDetailToSummary(detailRaw);
+    if (toIdString(detailRaw.id) !== id.trim()) {
+        throw new ApiError('La serie solicitada no coincide con Olympus.', 404);
+    }
+    const [chapters, chapterData] = await Promise.all([
+        getOlympusAllSeriesChapters(summary, signal),
+        getOlympusChapterData({
+            chapterId,
+            slug,
+            type: 'comic',
+        }, signal),
+    ]);
+    const currentChapter = chapters.find((chapter) => chapter.id === chapterId.trim()) ??
+        createOlympusChapterSummary(summary, {
+            id: chapterData.chapter.id,
+            name: chapterData.chapter.number,
+        });
+    return {
+        manga: summary,
+        chapter: currentChapter,
+        chapters,
+        pages: chapterData.chapter.pages,
+        readingMode: chapterData.chapter.pages.length > 0 ? 'pages' : 'external',
+        externalUrl: chapterData.chapterUrl,
+        source: 'olympus',
+        notice: OLYMPUS_NOTICE,
+    };
+}
 function isNuxtRef(value, payload) {
     return Number.isInteger(value) && Number(value) >= 0 && Number(value) < payload.length;
 }
@@ -37,25 +508,6 @@ function resolveNuxtValue(payload, value, stack = new Set()) {
         ]));
     }
     return value;
-}
-function readText(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-function readName(value) {
-    if (typeof value === 'string') {
-        return value.trim() || null;
-    }
-    if (value && typeof value === 'object' && 'name' in value) {
-        return readText(value.name);
-    }
-    return null;
-}
-function readNumber(value, fallback = 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-}
-function ensureUrlPath(value) {
-    return value.startsWith('/') ? value : `/${value}`;
 }
 function getPayloadUrl(options) {
     const payloadUrl = options.payloadUrl?.trim();
@@ -108,9 +560,6 @@ function buildSeriesRouteSlug(type, seriesSlug) {
         return seriesSlug;
     }
     return seriesSlug.startsWith(`${type}-`) ? seriesSlug : `${type}-${seriesSlug}`;
-}
-function buildSiteUrl(path) {
-    return new URL(ensureUrlPath(path), OLYMPUS_BASE_URL).toString();
 }
 export async function getOlympusChapterData(options, signal) {
     const payloadUrl = getPayloadUrl(options);

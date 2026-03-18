@@ -139,13 +139,13 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
-  app.get('/manga/home', async (_, reply) => {
-    const data = await getMangaHome()
+  app.get('/manga/home', async (request, reply) => {
+    const data = await getMangaHome(request.signal)
     return reply.send({ success: true, data })
   })
 
   app.get<{ Querystring: MangaSearchQuerystring }>('/manga/search', async (request, reply) => {
-    const data = await searchManga(request.query.query ?? '')
+    const data = await searchManga(request.query.query ?? '', request.signal)
     return reply.send({ success: true, data })
   })
 
@@ -203,6 +203,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         request.params.id,
         request.params.slug,
         request.params.chapterId,
+        request.signal,
       )
 
       return reply.send({ success: true, data })
@@ -216,12 +217,15 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
         request.params.libraryType,
         request.params.id,
         request.params.slug,
+        request.signal,
       )
 
       return reply.send({ success: true, data })
     },
   )
 }
+
+
 
 
 

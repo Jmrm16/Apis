@@ -70,12 +70,12 @@ export const apiRoutes = async (app) => {
         const data = await provider.getEpisodeByNumber(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
         return reply.send({ success: true, data });
     });
-    app.get('/manga/home', async (_, reply) => {
-        const data = await getMangaHome();
+    app.get('/manga/home', async (request, reply) => {
+        const data = await getMangaHome(request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/manga/search', async (request, reply) => {
-        const data = await searchManga(request.query.query ?? '');
+        const data = await searchManga(request.query.query ?? '', request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/manga/chapter-pages', async (request, reply) => {
@@ -101,11 +101,11 @@ export const apiRoutes = async (app) => {
         return reply.send({ success: true, data });
     });
     app.get('/manga/:libraryType/:id/:slug/chapter/:chapterId', async (request, reply) => {
-        const data = await getMangaReadData(request.params.libraryType, request.params.id, request.params.slug, request.params.chapterId);
+        const data = await getMangaReadData(request.params.libraryType, request.params.id, request.params.slug, request.params.chapterId, request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/manga/:libraryType/:id/:slug', async (request, reply) => {
-        const data = await getMangaDetail(request.params.libraryType, request.params.id, request.params.slug);
+        const data = await getMangaDetail(request.params.libraryType, request.params.id, request.params.slug, request.signal);
         return reply.send({ success: true, data });
     });
 };
