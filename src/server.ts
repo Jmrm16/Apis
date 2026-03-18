@@ -10,10 +10,7 @@ const app = Fastify({
 
 async function bootstrap() {
   await app.register(cors, {
-    origin:
-      env.corsOrigin === '*'
-        ? true
-        : env.corsOrigin.split(',').map((origin) => origin.trim()),
+    origin: env.corsOrigin === '*' ? true : env.corsOrigin,
   })
 
   app.setErrorHandler((error, _, reply) => {
