@@ -1,5 +1,6 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
+import { getOlympusChapterData } from '../services/olympus.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
 function toPositiveNumber(value, fallback) {
@@ -87,6 +88,16 @@ export const apiRoutes = async (app) => {
         const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || '';
         const referer = request.query.referer?.trim() || request.query.urlRefer?.trim();
         const data = await getTmoChapterPagesWithBrowser(chapterUrl, referer);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/olympus/chapter', async (request, reply) => {
+        const data = await getOlympusChapterData({
+            payloadUrl: request.query.payloadUrl?.trim(),
+            chapterUrl: request.query.chapterUrl?.trim(),
+            chapterId: request.query.chapterId?.trim(),
+            slug: request.query.slug?.trim(),
+            type: request.query.type?.trim(),
+        }, request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/manga/:libraryType/:id/:slug/chapter/:chapterId', async (request, reply) => {

@@ -1,4 +1,4 @@
-export type MangaSource = 'demo' | 'tmo'
+export type MangaSource = 'demo' | 'tmo' | 'olympus'
 
 export interface MangaSummary {
   id: string
@@ -75,4 +75,51 @@ export interface MangaChapterPages {
   referer: string
   totalPages: number
   pages: string[]
+}
+
+export interface OlympusChapterData {
+  source: 'olympus'
+  payloadUrl: string
+  routePath: string
+  chapterUrl: string
+  chapter: {
+    id: number | string
+    number: string
+    title: string | null
+    publishedAt: string | null
+    viewCount: number
+    type: string | null
+    pageCount: number
+    pages: string[]
+    team: {
+      id: number | string
+      name: string
+      cover: string | null
+    } | null
+  }
+  series: {
+    id: number | string
+    name: string
+    slug: string
+    url: string
+  } | null
+  prevChapter: {
+    id: number | string
+    number: string
+    url: string
+  } | null
+  nextChapter: {
+    id: number | string
+    number: string
+    url: string
+  } | null
+  recommendedSeries: Array<{
+    id: number | string
+    name: string
+    slug: string
+    status: string | null
+    cover: string | null
+    type: string | null
+    url: string
+  }>
 }

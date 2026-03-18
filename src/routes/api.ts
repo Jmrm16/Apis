@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
+import { getOlympusChapterData } from '../services/olympus.js'
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js'
 import { getTmoChapterPages } from '../services/tmo.js'
 import type {
@@ -30,6 +31,14 @@ interface TmoChapterPagesQuerystring {
   referer?: string
   urlPage?: string
   urlRefer?: string
+}
+
+interface OlympusChapterQuerystring {
+  payloadUrl?: string
+  chapterUrl?: string
+  chapterId?: string
+  slug?: string
+  type?: string
 }
 
 function toPositiveNumber(value: string | undefined, fallback: number): number {
@@ -166,6 +175,24 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
+  app.get<{ Querystring: OlympusChapterQuerystring }>(
+    '/manga/olympus/chapter',
+    async (request, reply) => {
+      const data = await getOlympusChapterData(
+        {
+          payloadUrl: request.query.payloadUrl?.trim(),
+          chapterUrl: request.query.chapterUrl?.trim(),
+          chapterId: request.query.chapterId?.trim(),
+          slug: request.query.slug?.trim(),
+          type: request.query.type?.trim(),
+        },
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
+
   app.get<{
     Params: { libraryType: string; id: string; slug: string; chapterId: string }
   }>(
@@ -195,3 +222,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
+
+
+
