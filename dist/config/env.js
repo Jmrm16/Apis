@@ -5,4 +5,6 @@ export const env = {
     corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
     provider: process.env.ANIME_PROVIDER || 'animeflv',
     animeFlvBaseUrl: process.env.ANIMEFLV_BASE_URL || 'https://animeflv.ahmedrangel.com',
+    browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || '',
+    browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
 };

@@ -1,4 +1,6 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
+import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
+import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
 function toPositiveNumber(value, fallback) {
     const parsed = Number(value);
@@ -67,10 +69,32 @@ export const apiRoutes = async (app) => {
         const data = await provider.getEpisodeByNumber(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
         return reply.send({ success: true, data });
     });
+    app.get('/manga/home', async (_, reply) => {
+        const data = await getMangaHome();
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/search', async (request, reply) => {
+        const data = await searchManga(request.query.query ?? '');
+        return reply.send({ success: true, data });
+    });
     app.get('/manga/chapter-pages', async (request, reply) => {
         const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || '';
         const referer = request.query.referer?.trim() || request.query.urlRefer?.trim();
         const data = await getTmoChapterPages(chapterUrl, referer, request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/chapter-pages-browser', async (request, reply) => {
+        const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || '';
+        const referer = request.query.referer?.trim() || request.query.urlRefer?.trim();
+        const data = await getTmoChapterPagesWithBrowser(chapterUrl, referer);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/:libraryType/:id/:slug/chapter/:chapterId', async (request, reply) => {
+        const data = await getMangaReadData(request.params.libraryType, request.params.id, request.params.slug, request.params.chapterId);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/:libraryType/:id/:slug', async (request, reply) => {
+        const data = await getMangaDetail(request.params.libraryType, request.params.id, request.params.slug);
         return reply.send({ success: true, data });
     });
 };
