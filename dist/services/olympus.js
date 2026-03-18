@@ -515,14 +515,14 @@ function getChapterTarget(options) {
         const chapterId = options.chapterId.trim();
         const slug = options.slug.trim();
         const chapterUrl = buildOlympusChapterUrl(slug, chapterId);
-        const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL);
-        apiUrl.searchParams.set('type', requestedType);
+        const routePath = new URL(chapterUrl).pathname;
         return {
             chapterId,
             slug,
             type: requestedType,
             chapterUrl,
-            apiUrl: apiUrl.toString(),
+            payloadUrl: `${chapterUrl}/_payload.json`,
+            routePath,
         };
     }
     const rawUrl = options.chapterUrl?.trim() || options.payloadUrl?.trim();
@@ -549,35 +549,55 @@ function getChapterTarget(options) {
         }
     }
     const chapterUrl = buildSiteUrl(pathname);
-    const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL);
-    apiUrl.searchParams.set('type', type);
     return {
         chapterId,
         slug,
         type,
         chapterUrl,
-        apiUrl: apiUrl.toString(),
+        payloadUrl: `${chapterUrl}/_payload.json`,
+        routePath: pathname,
     };
 }
-async function requestOlympusSiteJson(url, signal) {
-    const response = await fetch(url, {
+async function requestOlympusChapterPayload(url, signal) {
+    const response = await requestText(url, signal, {
         headers: OLYMPUS_HEADERS,
-        signal,
     });
-    if (!response.ok) {
-        let message = response.statusText || 'Olympus respondio con un error.';
-        try {
-            const payload = (await response.json());
-            if (payload.message) {
-                message = payload.message;
-            }
+    try {
+        const payload = JSON.parse(response.bodyText);
+        if (!Array.isArray(payload)) {
+            throw new Error('Payload invalido');
         }
-        catch {
-            // noop
-        }
-        throw new ApiError(message, response.status);
+        return payload;
     }
-    return (await response.json());
+    catch {
+        throw new ApiError('Olympus no devolvio un payload de capitulo valido.', 502);
+    }
+}
+function resolveChapterPayloadData(payload, routePath) {
+    const routeRecord = payload.find((item) => {
+        return Boolean(item && typeof item === 'object' && !Array.isArray(item) && routePath in item);
+    });
+    if (!routeRecord) {
+        throw new ApiError('No pude ubicar la ruta del capitulo dentro del payload de Olympus.', 502);
+    }
+    const resolved = resolveNuxtValue(payload, routeRecord[routePath]);
+    if (!resolved || typeof resolved !== 'object') {
+        throw new ApiError('Olympus devolvio un payload de capitulo incompleto.', 502);
+    }
+    const chapter = resolved.chapter;
+    const comic = resolved.comic;
+    const prevChapter = resolved.prev_chapter;
+    const nextChapter = resolved.next_chapter;
+    return {
+        chapter: chapter && typeof chapter === 'object' ? chapter : null,
+        comic: comic && typeof comic === 'object' ? comic : null,
+        prevChapter: prevChapter && typeof prevChapter === 'object'
+            ? prevChapter
+            : null,
+        nextChapter: nextChapter && typeof nextChapter === 'object'
+            ? nextChapter
+            : null,
+    };
 }
 function buildSeriesRouteSlug(type, seriesSlug) {
     if (!seriesSlug) {
@@ -590,11 +610,8 @@ function buildSeriesRouteSlug(type, seriesSlug) {
 }
 export async function getOlympusChapterData(options, signal) {
     const target = getChapterTarget(options);
-    const payload = await requestOlympusSiteJson(target.apiUrl, signal);
-    const chapter = payload.chapter ?? null;
-    const comic = payload.comic ?? null;
-    const prevChapter = payload.prev_chapter ?? null;
-    const nextChapter = payload.next_chapter ?? null;
+    const payload = await requestOlympusChapterPayload(target.payloadUrl, signal);
+    const { chapter, comic, prevChapter, nextChapter } = resolveChapterPayloadData(payload, target.routePath);
     if (!chapter) {
         throw new ApiError('Olympus no devolvio la informacion del capitulo.', 502);
     }
@@ -623,8 +640,8 @@ export async function getOlympusChapterData(options, signal) {
         : [];
     return {
         source: 'olympus',
-        payloadUrl: target.apiUrl,
-        routePath: new URL(target.chapterUrl).pathname,
+        payloadUrl: target.payloadUrl,
+        routePath: target.routePath,
         chapterUrl: target.chapterUrl,
         chapter: {
             id: chapter.id ?? '',
@@ -651,7 +668,7 @@ export async function getOlympusChapterData(options, signal) {
                 id: comic.id ?? '',
                 name: seriesName,
                 slug: seriesSlug,
-                url: buildSiteUrl(`/series/${seriesRouteSlug}`),
+                url: buildSiteUrl(`/series/${seriesRouteSlug ?? seriesSlug}`),
             }
             : null,
         prevChapter: prevChapter && seriesRouteSlug

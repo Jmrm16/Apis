@@ -815,7 +815,8 @@ function getChapterTarget(options: OlympusChapterOptions): {
   slug: string
   type: string
   chapterUrl: string
-  apiUrl: string
+  payloadUrl: string
+  routePath: string
 } {
   const requestedType = options.type?.trim() || 'comic'
 
@@ -823,15 +824,15 @@ function getChapterTarget(options: OlympusChapterOptions): {
     const chapterId = options.chapterId.trim()
     const slug = options.slug.trim()
     const chapterUrl = buildOlympusChapterUrl(slug, chapterId)
-    const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL)
-    apiUrl.searchParams.set('type', requestedType)
+    const routePath = new URL(chapterUrl).pathname
 
     return {
       chapterId,
       slug,
       type: requestedType,
       chapterUrl,
-      apiUrl: apiUrl.toString(),
+      payloadUrl: `${chapterUrl}/_payload.json`,
+      routePath,
     }
   }
 
@@ -868,40 +869,76 @@ function getChapterTarget(options: OlympusChapterOptions): {
   }
 
   const chapterUrl = buildSiteUrl(pathname)
-  const apiUrl = new URL(`/api/capitulo/${slug}/${chapterId}`, OLYMPUS_BASE_URL)
-  apiUrl.searchParams.set('type', type)
 
   return {
     chapterId,
     slug,
     type,
     chapterUrl,
-    apiUrl: apiUrl.toString(),
+    payloadUrl: `${chapterUrl}/_payload.json`,
+    routePath: pathname,
   }
 }
 
-async function requestOlympusSiteJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, {
+async function requestOlympusChapterPayload(
+  url: string,
+  signal?: AbortSignal,
+): Promise<NuxtPayload> {
+  const response = await requestText(url, signal, {
     headers: OLYMPUS_HEADERS,
-    signal,
   })
 
-  if (!response.ok) {
-    let message = response.statusText || 'Olympus respondio con un error.'
-
-    try {
-      const payload = (await response.json()) as { message?: string }
-      if (payload.message) {
-        message = payload.message
-      }
-    } catch {
-      // noop
+  try {
+    const payload = JSON.parse(response.bodyText) as NuxtPayload
+    if (!Array.isArray(payload)) {
+      throw new Error('Payload invalido')
     }
 
-    throw new ApiError(message, response.status)
+    return payload
+  } catch {
+    throw new ApiError('Olympus no devolvio un payload de capitulo valido.', 502)
+  }
+}
+
+function resolveChapterPayloadData(
+  payload: NuxtPayload,
+  routePath: string,
+): {
+  chapter: Record<string, unknown> | null
+  comic: Record<string, unknown> | null
+  prevChapter: Record<string, unknown> | null
+  nextChapter: Record<string, unknown> | null
+} {
+  const routeRecord = payload.find((item) => {
+    return Boolean(item && typeof item === 'object' && !Array.isArray(item) && routePath in item)
+  }) as Record<string, unknown> | undefined
+
+  if (!routeRecord) {
+    throw new ApiError('No pude ubicar la ruta del capitulo dentro del payload de Olympus.', 502)
   }
 
-  return (await response.json()) as T
+  const resolved = resolveNuxtValue(payload, routeRecord[routePath]) as Record<string, unknown> | null
+  if (!resolved || typeof resolved !== 'object') {
+    throw new ApiError('Olympus devolvio un payload de capitulo incompleto.', 502)
+  }
+
+  const chapter = resolved.chapter
+  const comic = resolved.comic
+  const prevChapter = resolved.prev_chapter
+  const nextChapter = resolved.next_chapter
+
+  return {
+    chapter: chapter && typeof chapter === 'object' ? (chapter as Record<string, unknown>) : null,
+    comic: comic && typeof comic === 'object' ? (comic as Record<string, unknown>) : null,
+    prevChapter:
+      prevChapter && typeof prevChapter === 'object'
+        ? (prevChapter as Record<string, unknown>)
+        : null,
+    nextChapter:
+      nextChapter && typeof nextChapter === 'object'
+        ? (nextChapter as Record<string, unknown>)
+        : null,
+  }
 }
 
 function buildSeriesRouteSlug(type: string | null, seriesSlug: string | null): string | null {
@@ -921,17 +958,11 @@ export async function getOlympusChapterData(
   signal?: AbortSignal,
 ): Promise<OlympusChapterData> {
   const target = getChapterTarget(options)
-  const payload = await requestOlympusSiteJson<{
-    chapter?: Record<string, unknown>
-    comic?: Record<string, unknown>
-    prev_chapter?: Record<string, unknown> | null
-    next_chapter?: Record<string, unknown> | null
-  }>(target.apiUrl, signal)
-
-  const chapter = payload.chapter ?? null
-  const comic = payload.comic ?? null
-  const prevChapter = payload.prev_chapter ?? null
-  const nextChapter = payload.next_chapter ?? null
+  const payload = await requestOlympusChapterPayload(target.payloadUrl, signal)
+  const { chapter, comic, prevChapter, nextChapter } = resolveChapterPayloadData(
+    payload,
+    target.routePath,
+  )
 
   if (!chapter) {
     throw new ApiError('Olympus no devolvio la informacion del capitulo.', 502)
@@ -962,8 +993,8 @@ export async function getOlympusChapterData(
 
   return {
     source: 'olympus',
-    payloadUrl: target.apiUrl,
-    routePath: new URL(target.chapterUrl).pathname,
+    payloadUrl: target.payloadUrl,
+    routePath: target.routePath,
     chapterUrl: target.chapterUrl,
     chapter: {
       id: (chapter.id as number | string | undefined) ?? '',
@@ -993,7 +1024,7 @@ export async function getOlympusChapterData(
             id: (comic.id as number | string | undefined) ?? '',
             name: seriesName,
             slug: seriesSlug,
-            url: buildSiteUrl(`/series/${seriesRouteSlug}`),
+            url: buildSiteUrl(`/series/${seriesRouteSlug ?? seriesSlug}`),
           }
         : null,
     prevChapter:
@@ -1046,6 +1077,4 @@ export async function getOlympusChapterData(
       .filter((item): item is OlympusChapterData['recommendedSeries'][number] => Boolean(item)),
   }
 }
-
-
 
