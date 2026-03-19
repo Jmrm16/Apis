@@ -1,7 +1,7 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
 import { getOlympusChapterData } from '../services/olympus.js';
-import { getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaPreview, } from '../services/series-donghua.js';
+import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaPreview, searchSeriesDonghua, } from '../services/series-donghua.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
 function toPositiveNumber(value, fallback) {
@@ -54,6 +54,14 @@ export const apiRoutes = async (app) => {
     app.get('/list/animes-on-air', async (_, reply) => {
         const onAir = await provider.getOnAir();
         return reply.send({ success: true, data: onAir });
+    });
+    app.get('/donghua/catalog', async (request, reply) => {
+        const data = await getSeriesDonghuaCatalog(toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua/search', async (request, reply) => {
+        const data = await searchSeriesDonghua(request.query.query?.trim() ?? '', toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
     });
     app.get('/donghua/preview', async (request, reply) => {
         const data = await getSeriesDonghuaPreview(request.signal);

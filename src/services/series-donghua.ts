@@ -1,9 +1,16 @@
 import { createContext, runInContext } from 'node:vm'
 import { ApiError, requestText } from '../lib/http.js'
-import type { AnimeDetail, AnimeEpisodeLink, AnimeSummary, EpisodeDetail } from '../types/anime.js'
+import type {
+  AnimeDetail,
+  AnimeEpisodeLink,
+  AnimeSummary,
+  EpisodeDetail,
+  SearchResultPage,
+} from '../types/anime.js'
 
 const SERIES_DONGHUA_BASE_URL = 'https://seriesdonghua.com'
 const SERIES_DONGHUA_ON_AIR_URL = `${SERIES_DONGHUA_BASE_URL}/donghuas-en-emision`
+const SERIES_DONGHUA_CATALOG_URL = `${SERIES_DONGHUA_BASE_URL}/todos-los-donghuas`
 
 function decodeHtmlEntities(value: string): string {
   return value
@@ -43,6 +50,16 @@ function buildSeriesUrl(slug: string): string {
 
 function buildEpisodeUrl(slug: string, number: number): string {
   return `${SERIES_DONGHUA_BASE_URL}/${slug.replace(/^\/+|\/+$/g, '')}-episodio-${number}/`
+}
+
+function withPageParam(url: string, page: number): string {
+  if (page <= 1) {
+    return url
+  }
+
+  const parsed = new URL(url)
+  parsed.searchParams.set('pag', String(page))
+  return parsed.toString()
 }
 
 function extractFirstNumber(value: string): number | null {
@@ -119,9 +136,10 @@ function parseVideoMap(unpackedScript: string): Record<string, string> {
 
   for (const [platform, encodedValue] of Object.entries(rawMap)) {
     try {
-            const innerJson = encodedValue.replace(/\\"/g, '"')
+      const innerJson = encodedValue.replace(/\\"/g, '"')
       const decodedValue = JSON.parse(innerJson) as string
-      if (decodedValue) {        normalizedMap[platform] = decodedValue.split('\\/').join('/')
+      if (decodedValue) {
+        normalizedMap[platform] = decodedValue.split('\\/').join('/')
       }
     } catch {
       continue
@@ -153,40 +171,98 @@ function parseCoverFromHtml(html: string): string | undefined {
   return undefined
 }
 
-export async function getSeriesDonghuaPreview(signal?: AbortSignal): Promise<AnimeSummary[]> {
-  const response = await requestText(SERIES_DONGHUA_ON_AIR_URL, signal)
-  const html = response.bodyText
-  const itemPattern =
-    /<div class="item col-lg-3 col-md-3 col-xs-6">\s*<a href="([^"]+)" class="angled-img">[\s\S]*?<img src="([^"]+)"[^>]*>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/g
+function parseSummaryCards(html: string): AnimeSummary[] {
+  const cardPattern =
+    /<div class="item col-lg-3 col-md-3 col-xs-6">\s*<a href="([^"]+)" class="angled-img">[\s\S]*?<img src="([^"]+)"[^>]*>[\s\S]*?<div class="badge show [^"]*">([\s\S]*?)<\/div>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/g
 
   const media: AnimeSummary[] = []
 
-  for (const match of html.matchAll(itemPattern)) {
-    const [, href = '', image = '', rawTitle = ''] = match
+  for (const match of html.matchAll(cardPattern)) {
+    const [, href = '', image = '', rawType = '', rawTitle = ''] = match
     const title = normalizeText(rawTitle)
+    const type = normalizeText(rawType) || 'Donghua'
 
     if (!href || !image || !title) {
       continue
     }
 
     const url = toAbsoluteUrl(href)
-    const slug = extractSlug(url)
 
     media.push({
       title,
-      slug,
-      type: 'donghua',
+      slug: extractSlug(url),
+      type: type.toLowerCase(),
       cover: toAbsoluteUrl(image),
       rating: 'SeriesDonghua',
       url,
     })
-
-    if (media.length >= 12) {
-      break
-    }
   }
 
   return media
+}
+
+function parseListingPage(html: string, fallbackPage: number, mode: SearchResultPage['mode']): SearchResultPage {
+  const media = parseSummaryCards(html)
+  const activePage =
+    Number(html.match(/<li class="active"><a href="javascript:void\(0\);">(\d+)<\/a><\/li>/i)?.[1] ?? '') ||
+    fallbackPage
+  const foundPages = Math.max(
+    activePage,
+    ...Array.from(html.matchAll(/href="\?pag=(\d+)"/g)).map((match) => Number(match[1] ?? '0')),
+  )
+  const hasNextPage = /fa-angle-right/.test(html)
+  const nextPageMatch = html.match(/<li><a href="\?pag=(\d+)"><i class="fa fa-angle-right"/i)
+  const previousPageMatch = html.match(/<li><a href="\?pag=(\d+)"><i class="fa fa-angle-left"/i)
+
+  return {
+    currentPage: activePage,
+    hasNextPage,
+    previousPage: previousPageMatch ? String(Number(previousPageMatch[1])) : null,
+    nextPage: nextPageMatch ? String(Number(nextPageMatch[1])) : null,
+    foundPages,
+    media,
+    mode,
+  }
+}
+
+export async function getSeriesDonghuaPreview(signal?: AbortSignal): Promise<AnimeSummary[]> {
+  const response = await requestText(SERIES_DONGHUA_ON_AIR_URL, signal)
+  return parseSummaryCards(response.bodyText).slice(0, 12)
+}
+
+export async function getSeriesDonghuaCatalog(
+  page = 1,
+  signal?: AbortSignal,
+): Promise<SearchResultPage> {
+  const response = await requestText(withPageParam(SERIES_DONGHUA_CATALOG_URL, page), signal)
+  return parseListingPage(response.bodyText, page, 'catalog')
+}
+
+export async function searchSeriesDonghua(
+  query: string,
+  page = 1,
+  signal?: AbortSignal,
+): Promise<SearchResultPage> {
+  const normalizedQuery = query.trim()
+
+  if (!normalizedQuery) {
+    return {
+      currentPage: 1,
+      hasNextPage: false,
+      previousPage: null,
+      nextPage: null,
+      foundPages: 0,
+      media: [],
+      mode: 'text',
+    }
+  }
+
+  const response = await requestText(
+    withPageParam(`${SERIES_DONGHUA_BASE_URL}/busquedas/${encodeURIComponent(normalizedQuery)}`, page),
+    signal,
+  )
+
+  return parseListingPage(response.bodyText, page, 'text')
 }
 
 export async function getSeriesDonghuaDetail(
@@ -292,8 +368,7 @@ export async function getSeriesDonghuaEpisode(
     throw new ApiError('SeriesDonghua no devolvio servidores para este episodio.', 502)
   }
 
-  const seriesTitle =
-    normalizeText(html.match(/<title>([\s\S]*?)【/i)?.[1] ?? '') || slug
+  const seriesTitle = normalizeText(html.match(/<title>([\s\S]*?)【/i)?.[1] ?? '') || slug
 
   return {
     animeSlug: slug,

@@ -1,6 +1,6 @@
 export type AnimeStatusCode = 1 | 2 | 3
 export type SearchOrder = 'default' | 'updated' | 'added' | 'title' | 'rating'
-export type SearchMode = 'text' | 'filter'
+export type SearchMode = 'text' | 'filter' | 'catalog'
 
 export interface AnimeSummary {
   title: string
@@ -75,3 +75,4 @@ export interface SearchResultPage {
   media: AnimeSummary[]
   mode: SearchMode
 }
+
