@@ -139,10 +139,6 @@ function toEmbeddedVideoUrl(platform: string, value: string): string {
   return value
 }
 
-function wrapPlayerUrl(value: string): string {
-  return `${SERIES_DONGHUA_BASE_URL}/player.php?url=${encodeURIComponent(value)}`
-}
-
 function parseCoverFromHtml(html: string): string | undefined {
   const metaMatch = html.match(/<meta property="og:image" content="([^"]+)"/i)
   if (metaMatch?.[1]) {
@@ -286,7 +282,7 @@ export async function getSeriesDonghuaEpisode(
 
       return {
         name,
-        embed: wrapPlayerUrl(embedTarget),
+        embed: embedTarget,
         download: embedTarget,
       }
     })

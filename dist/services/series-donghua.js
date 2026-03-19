@@ -108,9 +108,6 @@ function toEmbeddedVideoUrl(platform, value) {
     }
     return value;
 }
-function wrapPlayerUrl(value) {
-    return `${SERIES_DONGHUA_BASE_URL}/player.php?url=${encodeURIComponent(value)}`;
-}
 function parseCoverFromHtml(html) {
     const metaMatch = html.match(/<meta property="og:image" content="([^"]+)"/i);
     if (metaMatch?.[1]) {
@@ -213,7 +210,7 @@ export async function getSeriesDonghuaEpisode(slug, episodeNumber, signal) {
         const embedTarget = toEmbeddedVideoUrl(platform, source);
         return {
             name,
-            embed: wrapPlayerUrl(embedTarget),
+            embed: embedTarget,
             download: embedTarget,
         };
     })
