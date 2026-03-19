@@ -2,14 +2,14 @@ import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
 import { getOlympusChapterData } from '../services/olympus.js'
-import { getSeriesDonghuaPreview } from '../services/series-donghua.js'
+import {
+  getSeriesDonghuaDetail,
+  getSeriesDonghuaEpisode,
+  getSeriesDonghuaPreview,
+} from '../services/series-donghua.js'
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js'
 import { getTmoChapterPages } from '../services/tmo.js'
-import type {
-  AnimeStatusCode,
-  SearchOrder,
-  SearchParams,
-} from '../types/anime.js'
+import type { AnimeStatusCode, SearchOrder, SearchParams } from '../types/anime.js'
 
 interface SearchQuerystring {
   query?: string
@@ -47,10 +47,7 @@ function toPositiveNumber(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function buildSearchParams(
-  query: SearchQuerystring,
-  body?: SearchFilterBody,
-): SearchParams {
+function buildSearchParams(query: SearchQuerystring, body?: SearchFilterBody): SearchParams {
   return {
     query: query.query?.trim() ?? '',
     page: toPositiveNumber(query.page, 1),
@@ -110,6 +107,24 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ success: true, data })
   })
 
+  app.get<{ Params: { slug: string } }>('/donghua/:slug', async (request, reply) => {
+    const data = await getSeriesDonghuaDetail(request.params.slug, request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { slug: string; number: string } }>(
+    '/donghua/:slug/episode/:number',
+    async (request, reply) => {
+      const data = await getSeriesDonghuaEpisode(
+        request.params.slug,
+        toPositiveNumber(request.params.number, 1),
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
+
   app.get<{ Querystring: SearchQuerystring }>('/search', async (request, reply) => {
     const data = await provider.search(buildSearchParams(request.query), request.signal)
     return reply.send({ success: true, data })
@@ -158,8 +173,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: TmoChapterPagesQuerystring }>(
     '/manga/chapter-pages',
     async (request, reply) => {
-      const chapterUrl =
-        request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || ''
+      const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || ''
       const referer = request.query.referer?.trim() || request.query.urlRefer?.trim()
 
       const data = await getTmoChapterPages(chapterUrl, referer, request.signal)
@@ -171,8 +185,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: TmoChapterPagesQuerystring }>(
     '/manga/chapter-pages-browser',
     async (request, reply) => {
-      const chapterUrl =
-        request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || ''
+      const chapterUrl = request.query.chapterUrl?.trim() || request.query.urlPage?.trim() || ''
       const referer = request.query.referer?.trim() || request.query.urlRefer?.trim()
 
       const data = await getTmoChapterPagesWithBrowser(chapterUrl, referer)
@@ -230,11 +243,3 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
-
-
-
-
-
-
-
-
