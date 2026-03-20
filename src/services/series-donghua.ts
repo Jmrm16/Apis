@@ -53,6 +53,10 @@ function buildEpisodeUrl(slug: string, number: number): string {
   return `${SERIES_DONGHUA_BASE_URL}/${slug.replace(/^\/+|\/+$/g, '')}-episodio-${number}/`
 }
 
+function buildEpisodeUrlFromIdentifier(identifier: string): string {
+  return `${SERIES_DONGHUA_BASE_URL}/${identifier.replace(/^\/+|\/+$/g, '')}/`
+}
+
 function withPageParam(url: string, page: number): string {
   if (page <= 1) {
     return url
@@ -194,6 +198,34 @@ function parseCoverFromHtml(html: string): string | undefined {
   return undefined
 }
 
+function parseSeriesSlugFromEpisodeHtml(html: string, fallbackSlug: string): string {
+  const match = html.match(/<a href="([^"]+)"[^>]*>\s*<i class="fa fa-list/i)
+
+  if (match?.[1]) {
+    return extractSlug(toAbsoluteUrl(match[1]))
+  }
+
+  return fallbackSlug
+}
+
+function parseSeriesTitleFromEpisodeHtml(html: string, fallbackSlug: string): string {
+  const bannerTitle = normalizeText(
+    html.match(/<div[^>]*font-size:\s*45px[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '',
+  )
+
+  if (bannerTitle) {
+    return bannerTitle
+  }
+
+  const pageTitle = normalizeText(html.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? '')
+    .replace(/\s*[:\-]\s*E\d+(?:\.\d+)?[\s\S]*$/i, '')
+    .replace(/\s+Donghua[\s\S]*$/i, '')
+    .replace(/\|[\s\S]*$/i, '')
+    .trim()
+
+  return pageTitle || fallbackSlug
+}
+
 function parseSummaryCards(html: string): AnimeSummary[] {
   const cardPattern =
     /<div class="item col-lg-3 col-md-3 col-xs-6">\s*<a href="([^"]+)" class="angled-img">[\s\S]*?<img src="([^"]+)"[^>]*>[\s\S]*?<div class="badge show [^"]*">([\s\S]*?)<\/div>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/g
@@ -284,7 +316,7 @@ function parseRecentEpisodeCards(html: string): EpisodeSummary[] {
       animeSlug,
       episodeSlug,
       number,
-      routeParam: String(number),
+      routeParam: episodeSlug,
       cover: image ? toAbsoluteUrl(image) : undefined,
       url,
     })
@@ -314,7 +346,7 @@ function parseRecentEpisodeCards(html: string): EpisodeSummary[] {
       animeSlug,
       episodeSlug,
       number,
-      routeParam: String(number),
+      routeParam: episodeSlug,
       url,
     })
     seen.add(episodeSlug)
@@ -439,10 +471,21 @@ export async function getSeriesDonghuaDetail(
 
 export async function getSeriesDonghuaEpisode(
   slug: string,
-  episodeNumber: number,
+  episodeIdentifier: string | number,
   signal?: AbortSignal,
 ): Promise<EpisodeDetail> {
-  const response = await requestText(buildEpisodeUrl(slug, episodeNumber), signal)
+  const rawEpisodeIdentifier = String(episodeIdentifier).trim()
+  const episodeNumber =
+    extractEpisodeNumber(rawEpisodeIdentifier) ?? extractFirstNumber(rawEpisodeIdentifier)
+
+  if (!episodeNumber) {
+    throw new ApiError('No pude identificar el episodio solicitado.', 400)
+  }
+
+  const normalizedEpisodeSlug = /-episodio-\d+(?:\.\d+)?$/i.test(rawEpisodeIdentifier)
+    ? rawEpisodeIdentifier.replace(/^\/+|\/+$/g, '')
+    : `${slug.replace(/^\/+|\/+$/g, '')}-episodio-${episodeNumber}`
+  const response = await requestText(buildEpisodeUrlFromIdentifier(normalizedEpisodeSlug), signal)
   const html = response.bodyText
   const platformLabels = parsePlatformLabels(html)
   const unpackedScript = unpackPlayerScript(html)
@@ -473,16 +516,21 @@ export async function getSeriesDonghuaEpisode(
     throw new ApiError('SeriesDonghua no devolvio servidores para este episodio.', 502)
   }
 
-  const seriesTitle = normalizeText(html.match(/<title>([\s\S]*?)【/i)?.[1] ?? '') || slug
+  const fallbackSeriesSlug = extractAnimeSlugFromEpisodeSlug(normalizedEpisodeSlug) || slug
+  const animeSlug = parseSeriesSlugFromEpisodeHtml(html, fallbackSeriesSlug)
+  const seriesTitle = parseSeriesTitleFromEpisodeHtml(html, fallbackSeriesSlug)
 
   return {
-    animeSlug: slug,
+    animeSlug,
     title: `${seriesTitle} - ${episodeNumber}`,
     number: episodeNumber,
-    routeParam: String(episodeNumber),
+    routeParam: normalizedEpisodeSlug,
     servers,
   }
 }
+
+
+
 
 
 

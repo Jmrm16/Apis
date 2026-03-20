@@ -73,7 +73,7 @@ export const apiRoutes = async (app) => {
         return reply.send({ success: true, data });
     });
     app.get('/donghua/:slug/episode/:number', async (request, reply) => {
-        const data = await getSeriesDonghuaEpisode(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
+        const data = await getSeriesDonghuaEpisode(request.params.slug, request.params.number, request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/donghua-life/catalog', async (request, reply) => {

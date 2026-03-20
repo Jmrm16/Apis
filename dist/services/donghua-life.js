@@ -89,7 +89,7 @@ function extractAnimeSlugFromEpisodeRouteParam(value) {
 function parseRecentEpisodesFromHome(html) {
     const episodes = [];
     const seen = new Set();
-    const pattern = /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)">([\s\S]*?)<\/a>/gi;
+    const pattern = /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     for (const match of html.matchAll(pattern)) {
         const [, image = '', href = '', rawTitle = ''] = match;
         const routeParam = extractEpisodeRouteParam(href);

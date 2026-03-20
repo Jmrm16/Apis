@@ -135,7 +135,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const data = await getSeriesDonghuaEpisode(
         request.params.slug,
-        toPositiveNumber(request.params.number, 1),
+        request.params.number,
         request.signal,
       )
 
@@ -299,6 +299,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
 
 
 

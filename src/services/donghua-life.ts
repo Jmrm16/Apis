@@ -119,7 +119,7 @@ function parseRecentEpisodesFromHome(html: string): EpisodeSummary[] {
   const episodes: EpisodeSummary[] = []
   const seen = new Set<string>()
   const pattern =
-    /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)">([\s\S]*?)<\/a>/gi
+    /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>/gi
 
   for (const match of html.matchAll(pattern)) {
     const [, image = '', href = '', rawTitle = ''] = match
@@ -471,6 +471,7 @@ export async function getDonghuaLifeEpisode(
     servers,
   }
 }
+
 
 
 
