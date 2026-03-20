@@ -53,6 +53,23 @@ function extractFirstNumber(value) {
     const parsed = Number(match[1]);
     return Number.isFinite(parsed) ? parsed : null;
 }
+function extractEpisodeNumber(value) {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return null;
+    }
+    const explicitEpisodeMatch = normalized.match(/(?:episodio|episode|capitulo|capi?tulo)[-\s_]*(\d+(?:\.\d+)?)/i);
+    if (explicitEpisodeMatch) {
+        const parsed = Number(explicitEpisodeMatch[1]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    const numericTokens = normalized.match(/\d+(?:\.\d+)?/g);
+    if (!numericTokens?.length) {
+        return null;
+    }
+    const parsed = Number(numericTokens[numericTokens.length - 1]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
 function sortEpisodes(episodes) {
     return [...episodes].sort((left, right) => left.number - right.number);
 }
@@ -206,22 +223,24 @@ export async function getSeriesDonghuaDetail(slug, signal) {
     const genres = Array.from(html.matchAll(/<a href="[^"]+" class="generos[^"]*">[\s\S]*?<span class="label[^"]*">([\s\S]*?)<\/span>/g))
         .map((match) => normalizeText(match[1] ?? ''))
         .filter(Boolean);
-    const episodes = [];
+    const episodeMap = new Map();
     const episodesBlock = html.match(/<ul class="donghua-list">([\s\S]*?)<\/ul>/i)?.[1] ?? '';
     for (const match of episodesBlock.matchAll(/<a href="([^"]+)"[^>]*>[\s\S]*?<blockquote[^>]*>([\s\S]*?)<\/blockquote>/g)) {
         const [, href = '', rawLabel = ''] = match;
         const url = toAbsoluteUrl(href);
         const episodeSlug = extractSlug(url);
-        const number = extractFirstNumber(episodeSlug) ?? extractFirstNumber(rawLabel);
+        const number = extractEpisodeNumber(episodeSlug) ?? extractEpisodeNumber(rawLabel) ?? extractFirstNumber(rawLabel);
         if (!number) {
             continue;
         }
-        episodes.push({
-            number,
-            slug: episodeSlug,
-            routeParam: String(number),
-            url,
-        });
+        if (!episodeMap.has(number)) {
+            episodeMap.set(number, {
+                number,
+                slug: episodeSlug,
+                routeParam: String(number),
+                url,
+            });
+        }
     }
     return {
         title,
@@ -234,7 +253,7 @@ export async function getSeriesDonghuaDetail(slug, signal) {
         status: status || 'Sin estado',
         genres,
         nextAiringEpisode: null,
-        episodes: sortEpisodes(episodes),
+        episodes: sortEpisodes([...episodeMap.values()]),
         related: [],
         url: buildSeriesUrl(slug),
     };
