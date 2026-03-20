@@ -26,6 +26,7 @@ export const env = {
   corsOrigin: parseCorsOrigin(process.env.CORS_ORIGIN),
   provider: process.env.ANIME_PROVIDER || 'animeflv',
   animeFlvBaseUrl: process.env.ANIMEFLV_BASE_URL || 'https://animeflv.ahmedrangel.com',
+  animeMovilBaseUrl: process.env.ANIMEMOVIL_BASE_URL || 'https://animemovil2.com',
   browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || '',
   browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
 }
