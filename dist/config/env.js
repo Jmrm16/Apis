@@ -18,7 +18,7 @@ export const env = {
     port: Number(process.env.PORT || 10000),
     host: process.env.HOST || '0.0.0.0',
     corsOrigin: parseCorsOrigin(process.env.CORS_ORIGIN),
-    provider: process.env.ANIME_PROVIDER || 'animeflv',
+    provider: process.env.ANIME_PROVIDER || 'animemovil',
     animeFlvBaseUrl: process.env.ANIMEFLV_BASE_URL || 'https://animeflv.ahmedrangel.com',
     animeMovilBaseUrl: process.env.ANIMEMOVIL_BASE_URL || 'https://animemovil2.com',
     browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || '',
