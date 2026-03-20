@@ -185,6 +185,72 @@ function parseListingPage(html, fallbackPage, mode) {
         mode,
     };
 }
+function cleanRecentEpisodeTitle(value) {
+    return normalizeText(value)
+        .replace(/^donghua\s+/i, '')
+        .replace(/\s+episodio\s+\d+(?:\.\d+)?$/i, '')
+        .trim();
+}
+function extractAnimeSlugFromEpisodeSlug(value) {
+    return value
+        .replace(/-episodio-\d+(?:\.\d+)?$/i, '')
+        .replace(/^\/+|\/+$/g, '');
+}
+function parseRecentEpisodeCards(html) {
+    const episodes = [];
+    const seen = new Set();
+    const primaryPattern = /<a href="([^"]*?-episodio-(\d+(?:\.\d+)?)[^"]*)"[^>]*class="angled-img"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/gi;
+    for (const match of html.matchAll(primaryPattern)) {
+        const [, href = '', rawNumber = '', image = '', rawTitle = ''] = match;
+        const url = toAbsoluteUrl(href);
+        const episodeSlug = extractSlug(url);
+        const number = extractEpisodeNumber(rawTitle) ?? Number(rawNumber);
+        const animeSlug = extractAnimeSlugFromEpisodeSlug(episodeSlug);
+        const title = cleanRecentEpisodeTitle(rawTitle);
+        if (!episodeSlug || !animeSlug || !title || !Number.isFinite(number) || seen.has(episodeSlug)) {
+            continue;
+        }
+        episodes.push({
+            title,
+            animeSlug,
+            episodeSlug,
+            number,
+            routeParam: String(number),
+            cover: image ? toAbsoluteUrl(image) : undefined,
+            url,
+        });
+        seen.add(episodeSlug);
+    }
+    if (episodes.length > 0) {
+        return episodes;
+    }
+    const fallbackPattern = /<a href="([^"]*?-episodio-(\d+(?:\.\d+)?)[^"]*)"[^>]*>\s*([^<]+?)\s*<\/a>/gi;
+    for (const match of html.matchAll(fallbackPattern)) {
+        const [, href = '', rawNumber = '', rawTitle = ''] = match;
+        const url = toAbsoluteUrl(href);
+        const episodeSlug = extractSlug(url);
+        const number = extractEpisodeNumber(rawTitle) ?? Number(rawNumber);
+        const animeSlug = extractAnimeSlugFromEpisodeSlug(episodeSlug);
+        const title = cleanRecentEpisodeTitle(rawTitle);
+        if (!episodeSlug || !animeSlug || !title || !Number.isFinite(number) || seen.has(episodeSlug)) {
+            continue;
+        }
+        episodes.push({
+            title,
+            animeSlug,
+            episodeSlug,
+            number,
+            routeParam: String(number),
+            url,
+        });
+        seen.add(episodeSlug);
+    }
+    return episodes;
+}
+export async function getSeriesDonghuaRecentEpisodes(signal) {
+    const response = await requestText(SERIES_DONGHUA_BASE_URL, signal);
+    return parseRecentEpisodeCards(response.bodyText).slice(0, 18);
+}
 export async function getSeriesDonghuaPreview(signal) {
     const response = await requestText(SERIES_DONGHUA_ON_AIR_URL, signal);
     return parseSummaryCards(response.bodyText).slice(0, 12);

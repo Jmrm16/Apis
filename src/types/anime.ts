@@ -17,6 +17,7 @@ export interface EpisodeSummary {
   animeSlug: string
   episodeSlug: string
   number: number
+  routeParam?: string
   cover?: string
   url?: string
 }
@@ -77,5 +78,6 @@ export interface SearchResultPage {
   media: AnimeSummary[]
   mode: SearchMode
 }
+
 
 

@@ -4,6 +4,7 @@ import type {
   AnimeEpisodeLink,
   AnimeSummary,
   EpisodeDetail,
+  EpisodeSummary,
   SearchResultPage,
 } from '../types/anime.js'
 
@@ -93,6 +94,60 @@ function extractFirstNumber(value: string): number | null {
 
   const parsed = Number(match[1])
   return Number.isFinite(parsed) ? parsed : null
+}
+function cleanRecentEpisodeTitle(value: string): string {
+  const normalized = normalizeText(value)
+  const match = normalized.match(/^(.*?)(?:\s*-\s*(\d+))?\s+episodio\s*x?\d+(?:\.\d+)?$/i)
+
+  if (!match) {
+    return normalized
+  }
+
+  const [, baseTitle = '', season = ''] = match
+  return [baseTitle.trim(), season.trim()].filter(Boolean).join(' ')
+}
+
+function extractAnimeSlugFromEpisodeRouteParam(value: string): string {
+  const routeParam = extractEpisodeRouteParam(value)
+  return routeParam
+    .replace(/-episodio-x\d+(?:\.\d+)?$/i, '')
+    .replace(/-\d+$/i, '')
+    .replace(/^\/+|\/+$/g, '')
+}
+
+function parseRecentEpisodesFromHome(html: string): EpisodeSummary[] {
+  const episodes: EpisodeSummary[] = []
+  const seen = new Set<string>()
+  const pattern =
+    /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)">([\s\S]*?)<\/a>/gi
+
+  for (const match of html.matchAll(pattern)) {
+    const [, image = '', href = '', rawTitle = ''] = match
+    const routeParam = extractEpisodeRouteParam(href)
+    const number =
+      extractEpisodeNumberFromRouteParam(routeParam) ??
+      extractEpisodeNumberFromRouteParam(normalizeText(rawTitle)) ??
+      extractFirstNumber(normalizeText(rawTitle))
+    const animeSlug = extractAnimeSlugFromEpisodeRouteParam(routeParam)
+    const title = cleanRecentEpisodeTitle(rawTitle)
+
+    if (!routeParam || !animeSlug || !title || !number || seen.has(routeParam)) {
+      continue
+    }
+
+    episodes.push({
+      title,
+      animeSlug,
+      episodeSlug: routeParam,
+      routeParam,
+      number,
+      cover: image ? toAbsoluteUrl(image) : undefined,
+      url: toAbsoluteUrl(href),
+    })
+    seen.add(routeParam)
+  }
+
+  return episodes
 }
 function uniqueBySlug(items: AnimeSummary[]): AnimeSummary[] {
   const map = new Map<string, AnimeSummary>()
@@ -271,6 +326,10 @@ function buildEpisodeUrl(routeParam: string): string {
   return `${DONGHUA_LIFE_BASE_URL}/episode/${routeParam.replace(/^\/+|\/+$/g, '')}`
 }
 
+export async function getDonghuaLifeRecentEpisodes(signal?: AbortSignal): Promise<EpisodeSummary[]> {
+  const response = await requestText(DONGHUA_LIFE_BASE_URL, signal)
+  return parseRecentEpisodesFromHome(response.bodyText).slice(0, 18)
+}
 export async function getDonghuaLifePreview(signal?: AbortSignal): Promise<AnimeSummary[]> {
   const response = await requestText(DONGHUA_LIFE_PREVIEW_URL, signal)
   return parseListingCards(response.bodyText).slice(0, 12)
@@ -412,6 +471,7 @@ export async function getDonghuaLifeEpisode(
     servers,
   }
 }
+
 
 
 

@@ -1,8 +1,8 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
-import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, searchDonghuaLife } from '../services/donghua-life.js';
+import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js';
 import { getOlympusChapterData } from '../services/olympus.js';
-import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaPreview, searchSeriesDonghua, } from '../services/series-donghua.js';
+import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaRecentEpisodes, searchSeriesDonghua, } from '../services/series-donghua.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
 function toPositiveNumber(value, fallback) {
@@ -64,8 +64,8 @@ export const apiRoutes = async (app) => {
         const data = await searchSeriesDonghua(request.query.query?.trim() ?? '', toPositiveNumber(request.query.page, 1), request.signal);
         return reply.send({ success: true, data });
     });
-    app.get('/donghua/preview', async (request, reply) => {
-        const data = await getSeriesDonghuaPreview(request.signal);
+    app.get('/donghua/recent', async (request, reply) => {
+        const data = await getSeriesDonghuaRecentEpisodes(request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/donghua/:slug', async (request, reply) => {
@@ -84,8 +84,8 @@ export const apiRoutes = async (app) => {
         const data = await searchDonghuaLife(request.query.query?.trim() ?? '', toPositiveNumber(request.query.page, 1), request.signal);
         return reply.send({ success: true, data });
     });
-    app.get('/donghua-life/preview', async (request, reply) => {
-        const data = await getDonghuaLifePreview(request.signal);
+    app.get('/donghua-life/recent', async (request, reply) => {
+        const data = await getDonghuaLifeRecentEpisodes(request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/donghua-life/:slug', async (request, reply) => {

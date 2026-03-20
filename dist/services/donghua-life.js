@@ -70,6 +70,50 @@ function extractFirstNumber(value) {
     const parsed = Number(match[1]);
     return Number.isFinite(parsed) ? parsed : null;
 }
+function cleanRecentEpisodeTitle(value) {
+    const normalized = normalizeText(value);
+    const match = normalized.match(/^(.*?)(?:\s*-\s*(\d+))?\s+episodio\s*x?\d+(?:\.\d+)?$/i);
+    if (!match) {
+        return normalized;
+    }
+    const [, baseTitle = '', season = ''] = match;
+    return [baseTitle.trim(), season.trim()].filter(Boolean).join(' ');
+}
+function extractAnimeSlugFromEpisodeRouteParam(value) {
+    const routeParam = extractEpisodeRouteParam(value);
+    return routeParam
+        .replace(/-episodio-x\d+(?:\.\d+)?$/i, '')
+        .replace(/-\d+$/i, '')
+        .replace(/^\/+|\/+$/g, '');
+}
+function parseRecentEpisodesFromHome(html) {
+    const episodes = [];
+    const seen = new Set();
+    const pattern = /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)">([\s\S]*?)<\/a>/gi;
+    for (const match of html.matchAll(pattern)) {
+        const [, image = '', href = '', rawTitle = ''] = match;
+        const routeParam = extractEpisodeRouteParam(href);
+        const number = extractEpisodeNumberFromRouteParam(routeParam) ??
+            extractEpisodeNumberFromRouteParam(normalizeText(rawTitle)) ??
+            extractFirstNumber(normalizeText(rawTitle));
+        const animeSlug = extractAnimeSlugFromEpisodeRouteParam(routeParam);
+        const title = cleanRecentEpisodeTitle(rawTitle);
+        if (!routeParam || !animeSlug || !title || !number || seen.has(routeParam)) {
+            continue;
+        }
+        episodes.push({
+            title,
+            animeSlug,
+            episodeSlug: routeParam,
+            routeParam,
+            number,
+            cover: image ? toAbsoluteUrl(image) : undefined,
+            url: toAbsoluteUrl(href),
+        });
+        seen.add(routeParam);
+    }
+    return episodes;
+}
 function uniqueBySlug(items) {
     const map = new Map();
     for (const item of items) {
@@ -208,6 +252,10 @@ function buildSeasonUrl(slug) {
 }
 function buildEpisodeUrl(routeParam) {
     return `${DONGHUA_LIFE_BASE_URL}/episode/${routeParam.replace(/^\/+|\/+$/g, '')}`;
+}
+export async function getDonghuaLifeRecentEpisodes(signal) {
+    const response = await requestText(DONGHUA_LIFE_BASE_URL, signal);
+    return parseRecentEpisodesFromHome(response.bodyText).slice(0, 18);
 }
 export async function getDonghuaLifePreview(signal) {
     const response = await requestText(DONGHUA_LIFE_PREVIEW_URL, signal);

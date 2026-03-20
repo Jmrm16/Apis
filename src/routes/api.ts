@@ -1,14 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
-import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, searchDonghuaLife } from '../services/donghua-life.js'
+import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js'
 import { getOlympusChapterData } from '../services/olympus.js'
 import {
   getSeriesDonghuaCatalog,
   getSeriesDonghuaDetail,
   getSeriesDonghuaEpisode,
-  getSeriesDonghuaPreview,
-  searchSeriesDonghua,
+  getSeriesDonghuaPreview, getSeriesDonghuaRecentEpisodes, searchSeriesDonghua,
 } from '../services/series-donghua.js'
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js'
 import { getTmoChapterPages } from '../services/tmo.js'
@@ -120,10 +119,11 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ success: true, data })
   })
 
-  app.get('/donghua/preview', async (request, reply) => {
-    const data = await getSeriesDonghuaPreview(request.signal)
+  app.get('/donghua/recent', async (request, reply) => {
+    const data = await getSeriesDonghuaRecentEpisodes(request.signal)
     return reply.send({ success: true, data })
   })
+
 
   app.get<{ Params: { slug: string } }>('/donghua/:slug', async (request, reply) => {
     const data = await getSeriesDonghuaDetail(request.params.slug, request.signal)
@@ -158,10 +158,11 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ success: true, data })
   })
 
-  app.get('/donghua-life/preview', async (request, reply) => {
-    const data = await getDonghuaLifePreview(request.signal)
+  app.get('/donghua-life/recent', async (request, reply) => {
+    const data = await getDonghuaLifeRecentEpisodes(request.signal)
     return reply.send({ success: true, data })
   })
+
 
   app.get<{ Params: { slug: string } }>('/donghua-life/:slug', async (request, reply) => {
     const data = await getDonghuaLifeDetail(request.params.slug, request.signal)
@@ -298,6 +299,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
 
 
 
