@@ -1,5 +1,6 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
+import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, searchDonghuaLife } from '../services/donghua-life.js';
 import { getOlympusChapterData } from '../services/olympus.js';
 import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaPreview, searchSeriesDonghua, } from '../services/series-donghua.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
@@ -73,6 +74,26 @@ export const apiRoutes = async (app) => {
     });
     app.get('/donghua/:slug/episode/:number', async (request, reply) => {
         const data = await getSeriesDonghuaEpisode(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua-life/catalog', async (request, reply) => {
+        const data = await getDonghuaLifeCatalog(toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua-life/search', async (request, reply) => {
+        const data = await searchDonghuaLife(request.query.query?.trim() ?? '', toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua-life/preview', async (request, reply) => {
+        const data = await getDonghuaLifePreview(request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua-life/:slug', async (request, reply) => {
+        const data = await getDonghuaLifeDetail(request.params.slug, request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/donghua-life/:slug/episode/:episodeId', async (request, reply) => {
+        const data = await getDonghuaLifeEpisode(request.params.slug, request.params.episodeId, request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/search', async (request, reply) => {

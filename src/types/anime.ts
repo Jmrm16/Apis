@@ -32,6 +32,7 @@ export interface RelatedAnime {
 export interface AnimeEpisodeLink {
   number: number
   slug: string
+  routeParam?: string
   url?: string
 }
 
@@ -54,6 +55,7 @@ export interface EpisodeDetail {
   animeSlug: string
   title: string
   number: number
+  routeParam?: string
   servers: EpisodeServer[]
 }
 
@@ -75,4 +77,5 @@ export interface SearchResultPage {
   media: AnimeSummary[]
   mode: SearchMode
 }
+
 

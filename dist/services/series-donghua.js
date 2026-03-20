@@ -219,6 +219,7 @@ export async function getSeriesDonghuaDetail(slug, signal) {
         episodes.push({
             number,
             slug: episodeSlug,
+            routeParam: String(number),
             url,
         });
     }
@@ -269,6 +270,7 @@ export async function getSeriesDonghuaEpisode(slug, episodeNumber, signal) {
         animeSlug: slug,
         title: `${seriesTitle} - ${episodeNumber}`,
         number: episodeNumber,
+        routeParam: String(episodeNumber),
         servers,
     };
 }

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
+import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, searchDonghuaLife } from '../services/donghua-life.js'
 import { getOlympusChapterData } from '../services/olympus.js'
 import {
   getSeriesDonghuaCatalog,
@@ -142,6 +143,43 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
+  app.get<{ Querystring: SearchQuerystring }>('/donghua-life/catalog', async (request, reply) => {
+    const data = await getDonghuaLifeCatalog(toPositiveNumber(request.query.page, 1), request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Querystring: SearchQuerystring }>('/donghua-life/search', async (request, reply) => {
+    const data = await searchDonghuaLife(
+      request.query.query?.trim() ?? '',
+      toPositiveNumber(request.query.page, 1),
+      request.signal,
+    )
+
+    return reply.send({ success: true, data })
+  })
+
+  app.get('/donghua-life/preview', async (request, reply) => {
+    const data = await getDonghuaLifePreview(request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { slug: string } }>('/donghua-life/:slug', async (request, reply) => {
+    const data = await getDonghuaLifeDetail(request.params.slug, request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { slug: string; episodeId: string } }>(
+    '/donghua-life/:slug/episode/:episodeId',
+    async (request, reply) => {
+      const data = await getDonghuaLifeEpisode(
+        request.params.slug,
+        request.params.episodeId,
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
   app.get<{ Querystring: SearchQuerystring }>('/search', async (request, reply) => {
     const data = await provider.search(buildSearchParams(request.query), request.signal)
     return reply.send({ success: true, data })
@@ -260,5 +298,6 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
 
 
