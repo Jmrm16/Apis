@@ -1,4 +1,12 @@
-import 'dotenv/config'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+// Load backend/.env relative to this file so deployment cwd does not matter.
+dotenv.config({ path: resolve(__dirname, '../../.env') })
 
 const defaultCorsOrigins = [
   'http://localhost:5173',
@@ -30,4 +38,5 @@ export const env = {
   browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || '',
   browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
 }
+
 
