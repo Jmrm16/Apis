@@ -40,6 +40,28 @@ function extractEpisodeRouteParam(value) {
     const match = value.match(/\/episode\/([^/?#]+)/i);
     return match?.[1] ?? value.replace(/^\/+|\/+$/g, '');
 }
+function extractEpisodeNumberFromRouteParam(value) {
+    const normalized = value.trim();
+    if (!normalized) {
+        return null;
+    }
+    const explicitEpisodeMatch = normalized.match(/episodio-x(\d+(?:\.\d+)?)/i);
+    if (explicitEpisodeMatch) {
+        const parsed = Number(explicitEpisodeMatch[1]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    const suffixMatch = normalized.match(/x(\d+(?:\.\d+)?)$/i);
+    if (suffixMatch) {
+        const parsed = Number(suffixMatch[1]);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    const numericTokens = normalized.match(/\d+(?:\.\d+)?/g);
+    if (!numericTokens?.length) {
+        return null;
+    }
+    const parsed = Number(numericTokens[numericTokens.length - 1]);
+    return Number.isFinite(parsed) ? parsed : null;
+}
 function extractFirstNumber(value) {
     const match = value.match(/(\d+(?:\.\d+)?)/);
     if (!match) {
@@ -131,7 +153,10 @@ function parseSeasonEpisodes(html) {
     for (const match of html.matchAll(rowPattern)) {
         const [, rawNumber = '', href = '', rawLabel = ''] = match;
         const routeParam = extractEpisodeRouteParam(href);
-        const number = extractFirstNumber(normalizeText(rawNumber)) ?? extractFirstNumber(normalizeText(rawLabel));
+        const number = extractEpisodeNumberFromRouteParam(routeParam) ??
+            extractFirstNumber(normalizeText(rawNumber)) ??
+            extractEpisodeNumberFromRouteParam(normalizeText(rawLabel)) ??
+            extractFirstNumber(normalizeText(rawLabel));
         if (!routeParam || !number) {
             continue;
         }
@@ -275,7 +300,10 @@ export async function getDonghuaLifeEpisode(slug, episodeRouteParam, signal) {
     const animeSlug = extractSeriesSlug(seriesHref) || slug;
     const title = normalizeText(html.match(/field--name-title[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '') ||
         `${slug} - ${episodeRouteParam}`;
-    const number = extractFirstNumber(title) ?? extractFirstNumber(episodeRouteParam) ?? 1;
+    const number = extractEpisodeNumberFromRouteParam(episodeRouteParam) ??
+        extractEpisodeNumberFromRouteParam(title) ??
+        extractFirstNumber(title) ??
+        1;
     return {
         animeSlug,
         title,
