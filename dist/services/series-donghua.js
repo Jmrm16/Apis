@@ -218,6 +218,26 @@ function extractAnimeSlugFromEpisodeSlug(value) {
         .replace(/-episodio-\d+(?:\.\d+)?$/i, '')
         .replace(/^\/+|\/+$/g, '');
 }
+function parseEpisodeLinksFromDetailHtml(html) {
+    const episodeMap = new Map();
+    const episodesBlock = html.match(/<ul class="donghua-list">([\s\S]*?)<\/ul>/i)?.[1] ?? '';
+    for (const match of episodesBlock.matchAll(/<a href="([^"]+)"[^>]*>[\s\S]*?<blockquote[^>]*>([\s\S]*?)<\/blockquote>/g)) {
+        const [, href = '', rawLabel = ''] = match;
+        const url = toAbsoluteUrl(href);
+        const episodeSlug = extractSlug(url);
+        const number = extractEpisodeNumber(episodeSlug) ?? extractEpisodeNumber(rawLabel) ?? extractFirstNumber(rawLabel);
+        if (!number || !episodeSlug || episodeMap.has(number)) {
+            continue;
+        }
+        episodeMap.set(number, {
+            number,
+            slug: episodeSlug,
+            routeParam: episodeSlug,
+            url,
+        });
+    }
+    return sortEpisodes([...episodeMap.values()]);
+}
 function parseRecentEpisodeCards(html) {
     const episodes = [];
     const seen = new Set();
@@ -311,25 +331,7 @@ export async function getSeriesDonghuaDetail(slug, signal) {
     const genres = Array.from(html.matchAll(/<a href="[^"]+" class="generos[^"]*">[\s\S]*?<span class="label[^"]*">([\s\S]*?)<\/span>/g))
         .map((match) => normalizeText(match[1] ?? ''))
         .filter(Boolean);
-    const episodeMap = new Map();
-    const episodesBlock = html.match(/<ul class="donghua-list">([\s\S]*?)<\/ul>/i)?.[1] ?? '';
-    for (const match of episodesBlock.matchAll(/<a href="([^"]+)"[^>]*>[\s\S]*?<blockquote[^>]*>([\s\S]*?)<\/blockquote>/g)) {
-        const [, href = '', rawLabel = ''] = match;
-        const url = toAbsoluteUrl(href);
-        const episodeSlug = extractSlug(url);
-        const number = extractEpisodeNumber(episodeSlug) ?? extractEpisodeNumber(rawLabel) ?? extractFirstNumber(rawLabel);
-        if (!number) {
-            continue;
-        }
-        if (!episodeMap.has(number)) {
-            episodeMap.set(number, {
-                number,
-                slug: episodeSlug,
-                routeParam: String(number),
-                url,
-            });
-        }
-    }
+    const episodes = parseEpisodeLinksFromDetailHtml(html);
     return {
         title,
         slug,
@@ -341,10 +343,28 @@ export async function getSeriesDonghuaDetail(slug, signal) {
         status: status || 'Sin estado',
         genres,
         nextAiringEpisode: null,
-        episodes: sortEpisodes([...episodeMap.values()]),
+        episodes,
         related: [],
         url: buildSeriesUrl(slug),
     };
+}
+async function resolveSeriesDonghuaEpisodeSlug(slug, rawEpisodeIdentifier, episodeNumber, signal) {
+    if (/-episodio-\d+(?:\.\d+)?$/i.test(rawEpisodeIdentifier)) {
+        return rawEpisodeIdentifier.replace(/^\/+|\/+$/g, '');
+    }
+    try {
+        const response = await requestText(buildSeriesUrl(slug), signal);
+        const matchingEpisode = parseEpisodeLinksFromDetailHtml(response.bodyText).find((episode) => episode.number === episodeNumber && episode.routeParam?.trim());
+        if (matchingEpisode?.routeParam?.trim()) {
+            return matchingEpisode.routeParam.trim();
+        }
+    }
+    catch (error) {
+        if (!(error instanceof ApiError)) {
+            throw error;
+        }
+    }
+    return `${slug.replace(/^\/+|\/+$/g, '')}-episodio-${episodeNumber}`;
 }
 export async function getSeriesDonghuaEpisode(slug, episodeIdentifier, signal) {
     const rawEpisodeIdentifier = String(episodeIdentifier).trim();
@@ -352,9 +372,7 @@ export async function getSeriesDonghuaEpisode(slug, episodeIdentifier, signal) {
     if (!episodeNumber) {
         throw new ApiError('No pude identificar el episodio solicitado.', 400);
     }
-    const normalizedEpisodeSlug = /-episodio-\d+(?:\.\d+)?$/i.test(rawEpisodeIdentifier)
-        ? rawEpisodeIdentifier.replace(/^\/+|\/+$/g, '')
-        : `${slug.replace(/^\/+|\/+$/g, '')}-episodio-${episodeNumber}`;
+    const normalizedEpisodeSlug = await resolveSeriesDonghuaEpisodeSlug(slug, rawEpisodeIdentifier, episodeNumber, signal);
     const response = await requestText(buildEpisodeUrlFromIdentifier(normalizedEpisodeSlug), signal);
     const html = response.bodyText;
     const platformLabels = parsePlatformLabels(html);
