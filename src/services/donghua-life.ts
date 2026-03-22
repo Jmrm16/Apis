@@ -115,21 +115,42 @@ function extractAnimeSlugFromEpisodeRouteParam(value: string): string {
     .replace(/^\/+|\/+$/g, '')
 }
 
+function extractPublicRecentEpisodesSection(html: string): string {
+  const match = html.match(
+    /<div class="view view-episodios-home[\s\S]*?(?=<div class="view view-pelis-donghuas)/i,
+  )
+
+  return match?.[0] ?? html
+}
+
+function cleanHomeRecentSeriesTitle(value: string): string {
+  const normalized = normalizeText(value)
+  const seasonMatch = normalized.match(/^(.*?)\s*-\s*(\d+)\s*temp\b/i)
+
+  if (!seasonMatch) {
+    return normalized
+  }
+
+  const [, baseTitle = '', season = ''] = seasonMatch
+  return [baseTitle.trim(), season.trim()].filter(Boolean).join(' ')
+}
+
 function parseRecentEpisodesFromHome(html: string): EpisodeSummary[] {
+  const section = extractPublicRecentEpisodesSection(html)
   const episodes: EpisodeSummary[] = []
   const seen = new Set<string>()
   const pattern =
-    /<div class="episodio[^\"]*">[\s\S]*?<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+    /<div class="views-row">[\s\S]*?<div class="episode">[\s\S]*?<a href="([^\"]*\/episode\/[^\"]+)">\s*<img[^>]+src="([^\"]+)"[^>]*>[\s\S]*?<div class="titulo">\s*([\s\S]*?)\s*<\/div>[\s\S]*?<div class="subtitulo">\s*([\s\S]*?)\s*<\/div>/gi
 
-  for (const match of html.matchAll(pattern)) {
-    const [, image = '', href = '', rawTitle = ''] = match
+  for (const match of section.matchAll(pattern)) {
+    const [, href = '', image = '', rawTitle = '', rawSubtitle = ''] = match
     const routeParam = extractEpisodeRouteParam(href)
     const number =
       extractEpisodeNumberFromRouteParam(routeParam) ??
-      extractEpisodeNumberFromRouteParam(normalizeText(rawTitle)) ??
-      extractFirstNumber(normalizeText(rawTitle))
+      extractEpisodeNumberFromRouteParam(normalizeText(rawSubtitle)) ??
+      extractFirstNumber(normalizeText(rawSubtitle))
     const animeSlug = extractAnimeSlugFromEpisodeRouteParam(routeParam)
-    const title = cleanRecentEpisodeTitle(rawTitle)
+    const title = cleanHomeRecentSeriesTitle(rawTitle)
 
     if (!routeParam || !animeSlug || !title || !number || seen.has(routeParam)) {
       continue
@@ -149,6 +170,7 @@ function parseRecentEpisodesFromHome(html: string): EpisodeSummary[] {
 
   return episodes
 }
+
 function uniqueBySlug(items: AnimeSummary[]): AnimeSummary[] {
   const map = new Map<string, AnimeSummary>()
 
@@ -446,10 +468,15 @@ export async function getDonghuaLifeEpisode(
 ): Promise<EpisodeDetail> {
   const response = await requestText(buildEpisodeUrl(episodeRouteParam), signal)
   const html = response.bodyText
+
+  if (/patreon-restricted/i.test(html) || /Debes iniciar sesi[oó]n y ser miembro VIP/i.test(html)) {
+    throw new ApiError('Este episodio de DonghuaLife esta marcado como VIP y no expone servidores publicos.', 403)
+  }
+
   const servers = parseServers(html)
 
   if (servers.length === 0) {
-    throw new ApiError('Donghualife no devolvio servidores para este episodio.', 502)
+    throw new ApiError('DonghuaLife no devolvio servidores para este episodio.', 502)
   }
 
   const seriesHref = html.match(/<a href="([^\"]*\/series\/[^\"]+)" class="home-serie"/i)?.[1] ?? ''
@@ -471,9 +498,4 @@ export async function getDonghuaLifeEpisode(
     servers,
   }
 }
-
-
-
-
-
 
