@@ -25,22 +25,21 @@ function normalizePdfSize(width, height) {
         height: Math.max(1, Math.round(safeHeight * scale)),
     };
 }
-async function fetchImageBuffer(url, referer, signal) {
+async function fetchImageBuffer(url, referer) {
     const headers = new Headers(REQUEST_HEADERS);
     if (referer) {
         headers.set('Referer', referer);
     }
     const response = await fetch(url, {
         headers,
-        signal,
     });
     if (!response.ok) {
         throw new ApiError(`No pude descargar una pagina del capitulo (${response.status}).`, 502);
     }
     return Buffer.from(await response.arrayBuffer());
 }
-async function preparePdfImage(url, referer, signal) {
-    const sourceBytes = await fetchImageBuffer(url, referer, signal);
+async function preparePdfImage(url, referer) {
+    const sourceBytes = await fetchImageBuffer(url, referer);
     const image = sharp(sourceBytes, {
         animated: false,
         pages: 1,
@@ -52,7 +51,7 @@ async function preparePdfImage(url, referer, signal) {
     }
     const pdfSize = normalizePdfSize(metadata.width, metadata.height);
     const shouldResize = pdfSize.width !== metadata.width || pdfSize.height !== metadata.height;
-    const basePipeline = shouldResize
+    const pipeline = shouldResize
         ? image.resize({
             width: pdfSize.width,
             height: pdfSize.height,
@@ -62,20 +61,20 @@ async function preparePdfImage(url, referer, signal) {
     const sourceFormat = metadata.format?.toLowerCase();
     if (sourceFormat === 'jpeg' || sourceFormat === 'jpg') {
         return {
-            bytes: await basePipeline.jpeg({ quality: 92 }).toBuffer(),
+            bytes: await pipeline.jpeg({ quality: 92 }).toBuffer(),
             width: pdfSize.width,
             height: pdfSize.height,
             format: 'jpg',
         };
     }
     return {
-        bytes: await basePipeline.png().toBuffer(),
+        bytes: await pipeline.png().toBuffer(),
         width: pdfSize.width,
         height: pdfSize.height,
         format: 'png',
     };
 }
-export async function createMangaChapterPdf(payload, signal) {
+export async function createMangaChapterPdf(payload) {
     const title = payload.title.trim();
     const referer = payload.referer?.trim() || null;
     const pages = payload.pages
@@ -90,10 +89,7 @@ export async function createMangaChapterPdf(payload, signal) {
     }
     const finalDocument = await PDFDocument.create();
     for (const imageUrl of pages) {
-        if (signal?.aborted) {
-            throw new ApiError('La solicitud fue cancelada.', 499);
-        }
-        const preparedImage = await preparePdfImage(imageUrl, referer, signal);
+        const preparedImage = await preparePdfImage(imageUrl, referer);
         const embeddedImage = preparedImage.format === 'jpg'
             ? await finalDocument.embedJpg(preparedImage.bytes)
             : await finalDocument.embedPng(preparedImage.bytes);

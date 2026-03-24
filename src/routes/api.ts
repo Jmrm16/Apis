@@ -280,17 +280,14 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const pages = request.body?.pages ?? []
     const referer = request.body?.referer?.trim() || undefined
 
-    const pdf = await createMangaChapterPdf(
-      {
-        title,
-        pages,
-        referer,
-      },
-      request.signal,
-    )
+    const pdf = await createMangaChapterPdf({
+      title,
+      pages,
+      referer,
+    })
 
     reply.header('content-type', 'application/pdf')
-        reply.header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(pdf.fileName))
+    reply.header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(pdf.fileName))
 
     return reply.send(pdf.buffer)
   })
@@ -326,6 +323,7 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
 
 
 

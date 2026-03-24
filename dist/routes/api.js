@@ -151,7 +151,7 @@ export const apiRoutes = async (app) => {
             title,
             pages,
             referer,
-        }, request.signal);
+        });
         reply.header('content-type', 'application/pdf');
         reply.header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(pdf.fileName));
         return reply.send(pdf.buffer);

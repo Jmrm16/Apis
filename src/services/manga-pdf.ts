@@ -48,11 +48,7 @@ function normalizePdfSize(width: number, height: number) {
   }
 }
 
-async function fetchImageBuffer(
-  url: string,
-  referer: string | null,
-  signal?: AbortSignal,
-): Promise<Buffer> {
+async function fetchImageBuffer(url: string, referer: string | null): Promise<Buffer> {
   const headers = new Headers(REQUEST_HEADERS)
   if (referer) {
     headers.set('Referer', referer)
@@ -60,7 +56,6 @@ async function fetchImageBuffer(
 
   const response = await fetch(url, {
     headers,
-    signal,
   })
 
   if (!response.ok) {
@@ -70,12 +65,8 @@ async function fetchImageBuffer(
   return Buffer.from(await response.arrayBuffer())
 }
 
-async function preparePdfImage(
-  url: string,
-  referer: string | null,
-  signal?: AbortSignal,
-): Promise<PreparedPdfImage> {
-  const sourceBytes = await fetchImageBuffer(url, referer, signal)
+async function preparePdfImage(url: string, referer: string | null): Promise<PreparedPdfImage> {
+  const sourceBytes = await fetchImageBuffer(url, referer)
   const image = sharp(sourceBytes, {
     animated: false,
     pages: 1,
@@ -89,7 +80,7 @@ async function preparePdfImage(
 
   const pdfSize = normalizePdfSize(metadata.width, metadata.height)
   const shouldResize = pdfSize.width !== metadata.width || pdfSize.height !== metadata.height
-  const basePipeline = shouldResize
+  const pipeline = shouldResize
     ? image.resize({
         width: pdfSize.width,
         height: pdfSize.height,
@@ -100,7 +91,7 @@ async function preparePdfImage(
   const sourceFormat = metadata.format?.toLowerCase()
   if (sourceFormat === 'jpeg' || sourceFormat === 'jpg') {
     return {
-      bytes: await basePipeline.jpeg({ quality: 92 }).toBuffer(),
+      bytes: await pipeline.jpeg({ quality: 92 }).toBuffer(),
       width: pdfSize.width,
       height: pdfSize.height,
       format: 'jpg',
@@ -108,7 +99,7 @@ async function preparePdfImage(
   }
 
   return {
-    bytes: await basePipeline.png().toBuffer(),
+    bytes: await pipeline.png().toBuffer(),
     width: pdfSize.width,
     height: pdfSize.height,
     format: 'png',
@@ -117,7 +108,6 @@ async function preparePdfImage(
 
 export async function createMangaChapterPdf(
   payload: MangaChapterPdfPayload,
-  signal?: AbortSignal,
 ): Promise<{ buffer: Buffer; fileName: string }> {
   const title = payload.title.trim()
   const referer = payload.referer?.trim() || null
@@ -137,11 +127,7 @@ export async function createMangaChapterPdf(
   const finalDocument = await PDFDocument.create()
 
   for (const imageUrl of pages) {
-    if (signal?.aborted) {
-      throw new ApiError('La solicitud fue cancelada.', 499)
-    }
-
-    const preparedImage = await preparePdfImage(imageUrl, referer, signal)
+    const preparedImage = await preparePdfImage(imageUrl, referer)
     const embeddedImage =
       preparedImage.format === 'jpg'
         ? await finalDocument.embedJpg(preparedImage.bytes)
