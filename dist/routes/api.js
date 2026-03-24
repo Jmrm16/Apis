@@ -1,5 +1,6 @@
 import { getAvailableProviders, getProvider } from '../providers/index.js';
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js';
+import { createMangaChapterPdf } from '../services/manga-pdf.js';
 import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js';
 import { getOlympusChapterData } from '../services/olympus.js';
 import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaRecentEpisodes, searchSeriesDonghua, } from '../services/series-donghua.js';
@@ -141,6 +142,19 @@ export const apiRoutes = async (app) => {
             type: request.query.type?.trim(),
         }, request.signal);
         return reply.send({ success: true, data });
+    });
+    app.post('/manga/chapter-pdf', async (request, reply) => {
+        const title = request.body?.title?.trim() ?? '';
+        const pages = request.body?.pages ?? [];
+        const referer = request.body?.referer?.trim() || undefined;
+        const pdf = await createMangaChapterPdf({
+            title,
+            pages,
+            referer,
+        }, request.signal);
+        reply.header('content-type', 'application/pdf');
+        reply.header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(pdf.fileName));
+        return reply.send(pdf.buffer);
     });
     app.get('/manga/:libraryType/:id/:slug/chapter/:chapterId', async (request, reply) => {
         const data = await getMangaReadData(request.params.libraryType, request.params.id, request.params.slug, request.params.chapterId, request.signal);

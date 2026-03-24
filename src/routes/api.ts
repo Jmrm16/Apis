@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
+import { createMangaChapterPdf } from '../services/manga-pdf.js'
 import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js'
 import { getOlympusChapterData } from '../services/olympus.js'
 import {
@@ -42,6 +43,12 @@ interface OlympusChapterQuerystring {
   chapterId?: string
   slug?: string
   type?: string
+}
+
+interface MangaChapterPdfBody {
+  title?: string
+  pages?: string[]
+  referer?: string
 }
 
 function toPositiveNumber(value: string | undefined, fallback: number): number {
@@ -268,6 +275,26 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
+  app.post<{ Body: MangaChapterPdfBody }>('/manga/chapter-pdf', async (request, reply) => {
+    const title = request.body?.title?.trim() ?? ''
+    const pages = request.body?.pages ?? []
+    const referer = request.body?.referer?.trim() || undefined
+
+    const pdf = await createMangaChapterPdf(
+      {
+        title,
+        pages,
+        referer,
+      },
+      request.signal,
+    )
+
+    reply.header('content-type', 'application/pdf')
+        reply.header('content-disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(pdf.fileName))
+
+    return reply.send(pdf.buffer)
+  })
+
   app.get<{
     Params: { libraryType: string; id: string; slug: string; chapterId: string }
   }>(
@@ -299,6 +326,9 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
+
+
 
 
 
