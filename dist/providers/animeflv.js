@@ -138,9 +138,11 @@ export function createAnimeFlvProvider(baseUrl) {
                 };
             }
             const searchParams = new URLSearchParams({
-                order: params.order,
                 page: String(params.page),
             });
+            if (params.order !== 'default') {
+                searchParams.set('order', params.order);
+            }
             const data = await requestJson(baseUrl, `/api/search/by-filter?${searchParams.toString()}`, signal, {
                 method: 'POST',
                 body: JSON.stringify({

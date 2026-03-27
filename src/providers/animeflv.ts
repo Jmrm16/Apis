@@ -263,9 +263,12 @@ export function createAnimeFlvProvider(baseUrl: string): AnimeProvider {
       }
 
       const searchParams = new URLSearchParams({
-        order: params.order,
         page: String(params.page),
       })
+
+      if (params.order !== 'default') {
+        searchParams.set('order', params.order)
+      }
 
       const data = await requestJson<AnimeFlvSearchResponse>(
         baseUrl,
@@ -320,3 +323,4 @@ export function createAnimeFlvProvider(baseUrl: string): AnimeProvider {
     },
   }
 }
+
