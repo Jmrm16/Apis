@@ -196,12 +196,30 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Querystring: SearchQuerystring; Body: SearchFilterBody }>(
     '/search/by-filter',
     async (request, reply) => {
-      const data = await provider.search(
-        buildSearchParams(request.query, request.body),
-        request.signal,
-      )
+      try {
+        const data = await provider.search(
+          buildSearchParams(request.query, request.body),
+          request.signal,
+        )
 
-      return reply.send({ success: true, data })
+        return reply.send({ success: true, data })
+      } catch (error) {
+        request.log.error(
+          {
+            err: error,
+            provider: provider.key,
+            query: request.query,
+            body: request.body,
+          },
+          'Anime filtered search failed',
+        )
+
+        const message = error instanceof Error ? error.message : 'Anime filtered search failed.'
+        return reply.status(502).send({
+          success: false,
+          error: message,
+        })
+      }
     },
   )
 
