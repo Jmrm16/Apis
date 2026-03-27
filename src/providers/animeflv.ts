@@ -1,4 +1,4 @@
-import { requestJson } from '../lib/http.js'
+import { requestJson, requestText } from '../lib/http.js'
 import type {
   AnimeDetail,
   AnimeEpisodeLink,
@@ -10,6 +10,15 @@ import type {
   SearchResultPage,
 } from '../types/anime.js'
 import type { AnimeProvider } from './types.js'
+
+const ANIMEFLV_SITE_BASE_URL = 'https://www3.animeflv.net'
+const BROWSER_HEADERS = {
+  Accept:
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+}
 
 interface AnimeFlvListItem {
   title: string
@@ -79,6 +88,32 @@ interface AnimeFlvEpisodeResponse {
   }>
 }
 
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+}
+
+function stripTags(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ')
+}
+
+function normalizeText(value: string): string {
+  return decodeHtmlEntities(stripTags(value)).replace(/\s+/g, ' ').trim()
+}
+
+function toAbsoluteUrl(baseUrl: string, value: string): string {
+  return new URL(value, baseUrl).toString()
+}
+
 function extractAnimeSlugFromEpisodeSlug(episodeSlug: string, number: number): string {
   const suffix = `-${number}`
 
@@ -87,6 +122,31 @@ function extractAnimeSlugFromEpisodeSlug(episodeSlug: string, number: number): s
   }
 
   return episodeSlug
+}
+
+function extractSeriesSlug(value: string): string {
+  return value.replace(/^https?:\/\/[^/]+/i, '').replace(/^\/anime\//, '').replace(/^\/+|\/+$/g, '')
+}
+
+function normalizeAnimeFlvType(value: string): string {
+  const normalized = normalizeText(value).toLowerCase()
+
+  switch (normalized) {
+    case 'anime':
+    case 'tv':
+      return 'tv'
+    case 'pelicula':
+    case 'película':
+    case 'movie':
+      return 'movie'
+    case 'especial':
+    case 'special':
+      return 'special'
+    case 'ova':
+      return 'ova'
+    default:
+      return normalized || 'tv'
+  }
 }
 
 function normalizeEpisodeLinks(episodes: AnimeEpisodeLink[]): AnimeEpisodeLink[] {
@@ -125,6 +185,90 @@ function mapSearchItem(item: AnimeFlvSearchMediaItem): AnimeSummary {
     synopsis: item.synopsis,
     rating: item.rating,
     url: item.url,
+  }
+}
+
+function buildBrowseUrl(params: SearchParams): string {
+  const url = new URL('/browse', ANIMEFLV_SITE_BASE_URL)
+
+  for (const genre of params.genres) {
+    url.searchParams.append('genre[]', genre)
+  }
+
+  for (const type of params.types) {
+    url.searchParams.append('type[]', type)
+  }
+
+  for (const status of params.statuses) {
+    url.searchParams.append('status[]', String(status))
+  }
+
+  if (params.order !== 'default') {
+    url.searchParams.set('order', params.order)
+  }
+
+  if (params.page > 1) {
+    url.searchParams.set('page', String(params.page))
+  }
+
+  return url.toString()
+}
+
+function parseBrowseCards(html: string): AnimeFlvSearchMediaItem[] {
+  const listHtml = html.match(/<ul class="ListAnimes[^"]*">([\s\S]*?)<\/ul>/i)?.[1] ?? ''
+  const cards: AnimeFlvSearchMediaItem[] = []
+
+  for (const match of listHtml.matchAll(/<article class="Anime alt B">([\s\S]*?)<\/article>/gi)) {
+    const block = match[1] ?? ''
+    const href = block.match(/<a href="([^"]*\/anime\/[^"]+)"/i)?.[1] ?? ''
+    const title = normalizeText(block.match(/<h3 class="Title">([\s\S]*?)<\/h3>/i)?.[1] ?? '')
+    const cover = block.match(/<figure><img src="([^"]+)"/i)?.[1] ?? ''
+    const typeLabel = normalizeText(block.match(/<span class="Type[^>]*">([\s\S]*?)<\/span>/i)?.[1] ?? '')
+    const rating = normalizeText(block.match(/<span class="Vts fa-star">([\s\S]*?)<\/span>/i)?.[1] ?? '')
+    const descriptionBlock = block.match(/<div class="Description">([\s\S]*?)<\/div>/i)?.[1] ?? ''
+    const paragraphs = Array.from(descriptionBlock.matchAll(/<p>([\s\S]*?)<\/p>/gi))
+      .map((entry) => normalizeText(entry[1] ?? ''))
+      .filter(Boolean)
+    const synopsis = paragraphs[1] ?? ''
+    const slug = href ? extractSeriesSlug(href) : ''
+
+    if (!href || !slug || !title) {
+      continue
+    }
+
+    cards.push({
+      title,
+      slug,
+      type: normalizeAnimeFlvType(typeLabel),
+      cover: cover ? toAbsoluteUrl(ANIMEFLV_SITE_BASE_URL, cover) : undefined,
+      synopsis: synopsis || undefined,
+      rating: rating || undefined,
+      url: toAbsoluteUrl(ANIMEFLV_SITE_BASE_URL, href),
+    })
+  }
+
+  return cards
+}
+
+function parseBrowseResult(html: string, requestedPage: number): SearchResultPage {
+  const cards = parseBrowseCards(html)
+  const paginationHtml = html.match(/<ul class="pagination">([\s\S]*?)<\/ul>/i)?.[1] ?? ''
+  const pageMatches = Array.from(paginationHtml.matchAll(/page=(\d+)/gi)).map((match) => Number(match[1]))
+  const currentPage =
+    Number(paginationHtml.match(/<li class="active"><a[^>]*>\s*(\d+)\s*<\/a><\/li>/i)?.[1] ?? '') ||
+    requestedPage
+  const foundPages = Math.max(currentPage, requestedPage, 1, ...pageMatches)
+  const hasNextPage = /rel="next"/i.test(paginationHtml)
+  const hasPreviousPage = /rel="prev"/i.test(paginationHtml)
+
+  return {
+    currentPage,
+    hasNextPage,
+    previousPage: hasPreviousPage ? String(Math.max(1, currentPage - 1)) : null,
+    nextPage: hasNextPage ? String(currentPage + 1) : null,
+    foundPages,
+    media: cards.map(mapSearchItem),
+    mode: 'filter',
   }
 }
 
@@ -262,33 +406,11 @@ export function createAnimeFlvProvider(baseUrl: string): AnimeProvider {
         }
       }
 
-      const searchParams = new URLSearchParams({
-        page: String(params.page),
+      const response = await requestText(buildBrowseUrl(params), signal, {
+        headers: BROWSER_HEADERS,
       })
 
-      if (params.order !== 'default') {
-        searchParams.set('order', params.order)
-      }
-
-      const data = await requestJson<AnimeFlvSearchResponse>(
-        baseUrl,
-        `/api/search/by-filter?${searchParams.toString()}`,
-        signal,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            genres: params.genres,
-            statuses: params.statuses,
-            types: params.types,
-          }),
-        },
-      )
-
-      return {
-        ...data,
-        media: data.media.map(mapSearchItem),
-        mode: 'filter',
-      }
+      return parseBrowseResult(response.bodyText, params.page)
     },
 
     async getAnimeBySlug(slug, signal) {
@@ -323,4 +445,3 @@ export function createAnimeFlvProvider(baseUrl: string): AnimeProvider {
     },
   }
 }
-
