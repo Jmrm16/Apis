@@ -256,10 +256,33 @@ export function createAnimeFlvProvider(baseUrl) {
                     mode: 'text',
                 };
             }
-            const response = await requestText(buildBrowseUrl(params), signal, {
-                headers: BROWSER_HEADERS,
+            const searchParams = new URLSearchParams({
+                page: String(params.page),
             });
-            return parseBrowseResult(response.bodyText, params.page);
+            if (params.order !== 'default') {
+                searchParams.set('order', params.order);
+            }
+            try {
+                const data = await requestJson(baseUrl, `/api/search/by-filter?${searchParams.toString()}`, signal, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        genres: params.genres,
+                        statuses: params.statuses,
+                        types: params.types,
+                    }),
+                });
+                return {
+                    ...data,
+                    media: data.media.map(mapSearchItem),
+                    mode: 'filter',
+                };
+            }
+            catch {
+                const response = await requestText(buildBrowseUrl(params), signal, {
+                    headers: BROWSER_HEADERS,
+                });
+                return parseBrowseResult(response.bodyText, params.page);
+            }
         },
         async getAnimeBySlug(slug, signal) {
             const detail = await fetchAnimeDetail(slug, signal);
