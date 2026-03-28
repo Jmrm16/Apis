@@ -5,6 +5,7 @@ import { createMangaChapterPdf } from '../services/manga-pdf.js';
 import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js';
 import { getOlympusChapterData } from '../services/olympus.js';
 import { getNamiComiMangaDetail, getNamiComiMangaHome, getNamiComiMangaReadData, searchNamiComiManga } from '../services/namicomi.js';
+import { getMangaDexMangaDetail, getMangaDexMangaHome, getMangaDexMangaReadData, searchMangaDexManga } from '../services/mangadex.js';
 import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaRecentEpisodes, searchSeriesDonghua, } from '../services/series-donghua.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
@@ -161,6 +162,22 @@ export const apiRoutes = async (app) => {
     app.delete('/mihon/catalogs/:catalogId', async (request, reply) => {
         await removeMihonImportedCatalog(request.params.catalogId);
         return reply.send({ success: true, data: { ok: true } });
+    });
+    app.get('/manga/mangadex/home', async (request, reply) => {
+        const data = await getMangaDexMangaHome(request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/mangadex/search', async (request, reply) => {
+        const data = await searchMangaDexManga(request.query.query ?? '', request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/mangadex/:id/:slug/chapter/:chapterId', async (request, reply) => {
+        const data = await getMangaDexMangaReadData('mangadex__comic', request.params.id, request.params.slug, request.params.chapterId, request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/manga/mangadex/:id/:slug', async (request, reply) => {
+        const data = await getMangaDexMangaDetail('mangadex__comic', request.params.id, request.params.slug, request.signal);
+        return reply.send({ success: true, data });
     });
     app.get('/manga/namicomi/home', async (request, reply) => {
         const data = await getNamiComiMangaHome(request.signal);

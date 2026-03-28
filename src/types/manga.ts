@@ -1,4 +1,4 @@
-export type MangaSource = 'demo' | 'tmo' | 'olympus' | 'namicomi'
+export type MangaSource = 'demo' | 'tmo' | 'olympus' | 'namicomi' | 'mangadex'
 
 export interface MangaSummary {
   id: string
@@ -126,3 +126,4 @@ export interface OlympusChapterData {
     url: string
   }>
 }
+
