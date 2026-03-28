@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { env } from '../config/env.js'
 import { ApiError } from '../lib/http.js'
+import { buildMihonNativeFamilySummary, resolveMihonNativeSupport } from './mihon-native-adapters.js'
 import type {
   MihonCatalogFilters,
   MihonCatalogOrigin,
@@ -134,8 +135,9 @@ function mapSourceRecord(
   const baseUrls = parseBaseUrls(source.baseUrl)
   const baseUrl = baseUrls[0] ?? null
   const host = getHost(baseUrl)
+  const siteType = getSiteType(baseUrls, host)
 
-  return {
+  const baseRecord = {
     key: `${catalog.id}:${extension.pkg}:${source.id}`,
     sourceName: source.name,
     sourceLang: source.lang?.trim().toLowerCase() || extension.lang?.trim().toLowerCase() || 'all',
@@ -150,10 +152,15 @@ function mapSourceRecord(
     extensionVersion: extension.version,
     extensionLang: extension.lang?.trim().toLowerCase() || 'all',
     extensionCode: Number(extension.code) || 0,
-    siteType: getSiteType(baseUrls, host),
+    siteType,
     catalogId: catalog.id,
     catalogName: catalog.name,
     catalogOrigin: catalog.origin,
+  }
+
+  return {
+    ...baseRecord,
+    nativeSupport: resolveMihonNativeSupport(baseRecord),
   }
 }
 
@@ -489,6 +496,7 @@ export async function getMihonCatalog(filters: MihonCatalogFilters = {}): Promis
     totalPages,
     filteredCount: totalItems,
     stats: buildStats(catalogs, sources),
+    nativeFamilies: buildMihonNativeFamilySummary(filtered),
     items,
   }
 }
@@ -570,4 +578,6 @@ export async function removeMihonImportedCatalog(catalogId: string): Promise<voi
 
   await writeImportedCatalogs(nextCatalogs)
 }
+
+
 

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/http.js';
+import { buildMihonNativeFamilySummary, resolveMihonNativeSupport } from './mihon-native-adapters.js';
 const DEFAULT_LIMIT = 48;
 const MAX_LIMIT = 120;
 const MIN_CACHE_TTL_MS = 60_000;
@@ -73,7 +74,8 @@ function mapSourceRecord(extension, source, catalog) {
     const baseUrls = parseBaseUrls(source.baseUrl);
     const baseUrl = baseUrls[0] ?? null;
     const host = getHost(baseUrl);
-    return {
+    const siteType = getSiteType(baseUrls, host);
+    const baseRecord = {
         key: `${catalog.id}:${extension.pkg}:${source.id}`,
         sourceName: source.name,
         sourceLang: source.lang?.trim().toLowerCase() || extension.lang?.trim().toLowerCase() || 'all',
@@ -88,10 +90,14 @@ function mapSourceRecord(extension, source, catalog) {
         extensionVersion: extension.version,
         extensionLang: extension.lang?.trim().toLowerCase() || 'all',
         extensionCode: Number(extension.code) || 0,
-        siteType: getSiteType(baseUrls, host),
+        siteType,
         catalogId: catalog.id,
         catalogName: catalog.name,
         catalogOrigin: catalog.origin,
+    };
+    return {
+        ...baseRecord,
+        nativeSupport: resolveMihonNativeSupport(baseRecord),
     };
 }
 function buildStats(catalogs, sources) {
@@ -367,6 +373,7 @@ export async function getMihonCatalog(filters = {}) {
         totalPages,
         filteredCount: totalItems,
         stats: buildStats(catalogs, sources),
+        nativeFamilies: buildMihonNativeFamilySummary(filtered),
         items,
     };
 }

@@ -19,6 +19,8 @@ export interface MihonRepoExtension {
 export type MihonNsfwFilter = 'safe' | 'nsfw' | 'all'
 export type MihonSiteType = 'remote' | 'local' | 'configurable'
 export type MihonCatalogOrigin = 'official' | 'imported'
+export type MihonNativeSupportStatus = 'integrated' | 'candidate' | 'blocked'
+export type MihonNativeSupportConfidence = 'high' | 'medium' | 'low'
 
 export interface MihonCatalogFilters {
   query?: string
@@ -27,6 +29,24 @@ export interface MihonCatalogFilters {
   page?: number
   limit?: number
   refresh?: boolean
+}
+
+export interface MihonNativeSupport {
+  status: MihonNativeSupportStatus
+  adapterId: string
+  adapterName: string
+  confidence: MihonNativeSupportConfidence
+  canOpenNatively: boolean
+  appSource: 'olympus' | 'manhwaweb' | 'mangadex' | 'namicomi' | null
+  reason: string
+}
+
+export interface MihonNativeFamilySummary {
+  adapterId: string
+  adapterName: string
+  status: MihonNativeSupportStatus
+  count: number
+  canOpenNatively: boolean
 }
 
 export interface MihonSourceRecord {
@@ -48,6 +68,7 @@ export interface MihonSourceRecord {
   catalogId: string
   catalogName: string
   catalogOrigin: MihonCatalogOrigin
+  nativeSupport: MihonNativeSupport
 }
 
 export interface MihonLanguageStat {
@@ -78,6 +99,7 @@ export interface MihonCatalogPage {
   totalPages: number
   filteredCount: number
   stats: MihonCatalogStats
+  nativeFamilies: MihonNativeFamilySummary[]
   items: MihonSourceRecord[]
 }
 
