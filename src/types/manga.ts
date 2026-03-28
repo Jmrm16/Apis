@@ -1,4 +1,4 @@
-export type MangaSource = 'demo' | 'tmo' | 'olympus'
+export type MangaSource = 'demo' | 'tmo' | 'olympus' | 'namicomi'
 
 export interface MangaSummary {
   id: string
@@ -27,6 +27,8 @@ export interface MangaRecentChapter {
   numberLabel: string
   cover: string
   sourceUrl: string | null
+  source?: MangaSource
+  publishedAt?: string | null
 }
 
 export interface MangaChapterSummary {
@@ -37,6 +39,7 @@ export interface MangaChapterSummary {
   shortTitle: string
   cover: string
   sourceUrl: string | null
+  publishedAt?: string | null
 }
 
 export interface MangaHomeData {

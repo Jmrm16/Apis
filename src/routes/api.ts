@@ -1,9 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { getAvailableProviders, getProvider } from '../providers/index.js'
 import { getMangaDetail, getMangaHome, getMangaReadData, searchManga } from '../services/manga.js'
+import { getMihonCatalog, getMihonImportedCatalogs, importMihonCatalog, removeMihonImportedCatalog } from '../services/mihon-repo.js'
 import { createMangaChapterPdf } from '../services/manga-pdf.js'
 import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifePreview, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js'
 import { getOlympusChapterData } from '../services/olympus.js'
+import { getNamiComiMangaDetail, getNamiComiMangaHome, getNamiComiMangaReadData, searchNamiComiManga } from '../services/namicomi.js'
 import {
   getSeriesDonghuaCatalog,
   getSeriesDonghuaDetail,
@@ -49,6 +51,21 @@ interface MangaChapterPdfBody {
   title?: string
   pages?: string[]
   referer?: string
+}
+
+interface MihonCatalogQuerystring {
+  query?: string
+  lang?: string
+  nsfw?: string
+  page?: string
+  limit?: string
+  refresh?: string
+}
+
+interface MihonImportBody {
+  name?: string
+  repoUrl?: string
+  jsonText?: string
 }
 
 function toPositiveNumber(value: string | undefined, fallback: number): number {
@@ -241,6 +258,79 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
+  app.get<{ Querystring: MihonCatalogQuerystring }>('/mihon/sources', async (request, reply) => {
+    const normalizedNsfw =
+      request.query.nsfw === 'all' || request.query.nsfw === 'nsfw'
+        ? request.query.nsfw
+        : request.query.nsfw === '1' || request.query.nsfw === 'true'
+          ? 'all'
+          : 'safe'
+
+    const data = await getMihonCatalog({
+      query: request.query.query,
+      lang: request.query.lang,
+      nsfw: normalizedNsfw,
+      page: toPositiveNumber(request.query.page, 1),
+      limit: toPositiveNumber(request.query.limit, 48),
+      refresh: request.query.refresh === '1' || request.query.refresh === 'true',
+    })
+
+    return reply.send({ success: true, data })
+  })
+  app.get('/mihon/catalogs', async (_, reply) => {
+    const items = await getMihonImportedCatalogs()
+    return reply.send({ success: true, data: { items } })
+  })
+
+  app.post<{ Body: MihonImportBody }>('/mihon/catalogs', async (request, reply) => {
+    const data = await importMihonCatalog({
+      name: request.body?.name,
+      repoUrl: request.body?.repoUrl,
+      jsonText: request.body?.jsonText,
+    })
+
+    return reply.send({ success: true, data })
+  })
+
+  app.delete<{ Params: { catalogId: string } }>('/mihon/catalogs/:catalogId', async (request, reply) => {
+    await removeMihonImportedCatalog(request.params.catalogId)
+    return reply.send({ success: true, data: { ok: true } })
+  })
+
+  app.get('/manga/namicomi/home', async (request, reply) => {
+    const data = await getNamiComiMangaHome(request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Querystring: MangaSearchQuerystring }>('/manga/namicomi/search', async (request, reply) => {
+    const data = await searchNamiComiManga(request.query.query ?? '', request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { id: string; slug: string; chapterId: string } }>(
+    '/manga/namicomi/:id/:slug/chapter/:chapterId',
+    async (request, reply) => {
+      const data = await getNamiComiMangaReadData(
+        request.params.id,
+        request.params.slug,
+        request.params.chapterId,
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
+
+  app.get<{ Params: { id: string; slug: string } }>('/manga/namicomi/:id/:slug', async (request, reply) => {
+    const data = await getNamiComiMangaDetail(
+      request.params.id,
+      request.params.slug,
+      request.signal,
+    )
+
+    return reply.send({ success: true, data })
+  })
+
   app.get('/manga/home', async (request, reply) => {
     const data = await getMangaHome(request.signal)
     return reply.send({ success: true, data })
@@ -341,6 +431,9 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
+
+
+
 
 
 

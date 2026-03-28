@@ -29,4 +29,7 @@ export const env = {
     animeMovilBaseUrl: process.env.ANIMEMOVIL_BASE_URL || 'https://animemovil2.com',
     browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH || '',
     browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
+    mihonRepoUrl: process.env.MIHON_REPO_URL || 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json',
+    mihonRepoCacheTtlMs: Number(process.env.MIHON_REPO_CACHE_TTL_MS || 6 * 60 * 60 * 1000),
+    mihonImportsFilePath: process.env.MIHON_IMPORTS_FILE_PATH || resolve(__dirname, '../../data/mihon-imports.json'),
 };
