@@ -15,6 +15,7 @@ import {
 } from '../services/series-donghua.js'
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js'
 import { getTmoChapterPages } from '../services/tmo.js'
+import { proxyAnimeVideoRequest, resolveAnimeVideoServer } from '../services/anime-video.js'
 import type { AnimeStatusCode, SearchOrder, SearchParams } from '../types/anime.js'
 
 interface SearchQuerystring {
@@ -26,6 +27,7 @@ interface SearchQuerystring {
 interface MangaSearchQuerystring {
   query?: string
 }
+
 
 interface SearchFilterBody {
   genres?: string[]
@@ -67,6 +69,14 @@ interface MihonImportBody {
   name?: string
   repoUrl?: string
   jsonText?: string
+}
+
+interface AnimeVideoResolveBody {
+  server?: {
+    name?: string
+    download?: string | null
+    embed?: string | null
+  }
 }
 
 function toPositiveNumber(value: string | undefined, fallback: number): number {
@@ -257,6 +267,33 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
       return reply.send({ success: true, data })
     },
+  )
+
+  app.post<{ Body: AnimeVideoResolveBody }>(
+    '/anime/video/resolve',
+    async (request, reply) => {
+      const rawServer = request.body?.server
+
+      if (!rawServer?.name?.trim()) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Missing server payload.',
+        })
+      }
+
+      const data = await resolveAnimeVideoServer({
+        name: rawServer.name.trim(),
+        download: rawServer.download?.trim() || null,
+        embed: rawServer.embed?.trim() || null,
+      }, request.signal)
+
+      return reply.send({ success: true, data })
+    },
+  )
+
+  app.get<{ Params: { token: string } }>(
+    '/anime/video/proxy/:token',
+    async (request, reply) => proxyAnimeVideoRequest(request, reply),
   )
 
   app.get<{ Querystring: MihonCatalogQuerystring }>('/mihon/sources', async (request, reply) => {
