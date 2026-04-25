@@ -1,5 +1,6 @@
 import { ApiError } from '../lib/http.js'
 import {
+  getOlympusMangaCatalog,
   getOlympusMangaDetail,
   getOlympusMangaHome,
   getOlympusMangaReadData,
@@ -41,7 +42,9 @@ export async function getMangaHome(signal?: AbortSignal): Promise<MangaHomeData>
 }
 
 export async function searchManga(query: string, signal?: AbortSignal): Promise<MangaSummary[]> {
-  if (!query.trim()) {
+  const cleanQuery = query.trim()
+
+  if (!cleanQuery) {
     try {
       const home = await getOlympusMangaHome(signal)
       return home.trending
@@ -50,8 +53,12 @@ export async function searchManga(query: string, signal?: AbortSignal): Promise<
     }
   }
 
+  if (cleanQuery === '__catalog__') {
+    return getOlympusMangaCatalog(signal)
+  }
+
   try {
-    const results = await searchOlympusManga(query, signal)
+    const results = await searchOlympusManga(cleanQuery, signal)
     if (results.length > 0) {
       return results
     }
@@ -59,12 +66,12 @@ export async function searchManga(query: string, signal?: AbortSignal): Promise<
     // fallback below
   }
 
-  const cleanQuery = query.trim().toLowerCase()
+  const normalizedQuery = cleanQuery.toLowerCase()
   return mangaDemoCatalog.filter((manga) => {
     return (
-      manga.title.toLowerCase().includes(cleanQuery) ||
-      manga.synopsis.toLowerCase().includes(cleanQuery) ||
-      manga.genres.some((genre) => genre.toLowerCase().includes(cleanQuery))
+      manga.title.toLowerCase().includes(normalizedQuery) ||
+      manga.synopsis.toLowerCase().includes(normalizedQuery) ||
+      manga.genres.some((genre) => genre.toLowerCase().includes(normalizedQuery))
     )
   })
 }
