@@ -663,6 +663,21 @@ export function isOlympusMangaLibrary(libraryType: string): boolean {
   return libraryType.trim().toLowerCase() === 'comic'
 }
 
+async function resolveOlympusSeriesSlug(
+  id: string,
+  slug: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const normalizedId = id.trim()
+  const normalizedSlug = slug.trim().toLowerCase()
+  const catalog = await getOlympusFullCatalog(signal)
+  const match =
+    catalog.find((item) => item.id.trim() === normalizedId) ??
+    catalog.find((item) => item.slug.trim().toLowerCase() === normalizedSlug)
+
+  return match?.slug?.trim() || slug.trim()
+}
+
 export async function getOlympusMangaHome(signal?: AbortSignal): Promise<MangaHomeData> {
   const [seriesPage, recentGroups] = await Promise.all([
     getOlympusSeriesPage(1, signal),
@@ -733,8 +748,9 @@ export async function getOlympusMangaDetail(
     throw new ApiError('La serie no pertenece a Olympus.', 404)
   }
 
+  const resolvedSlug = await resolveOlympusSeriesSlug(id, slug, signal)
   const [detailRaw, seriesPage] = await Promise.all([
-    getOlympusSeriesDetailRaw(slug, signal),
+    getOlympusSeriesDetailRaw(resolvedSlug, signal),
     getOlympusSeriesPage(1, signal),
   ])
   const summary = mapOlympusDetailToSummary(detailRaw)
@@ -769,7 +785,8 @@ export async function getOlympusMangaReadData(
     throw new ApiError('La serie no pertenece a Olympus.', 404)
   }
 
-  const detailRaw = await getOlympusSeriesDetailRaw(slug, signal)
+  const resolvedSlug = await resolveOlympusSeriesSlug(id, slug, signal)
+  const detailRaw = await getOlympusSeriesDetailRaw(resolvedSlug, signal)
   const summary = mapOlympusDetailToSummary(detailRaw)
 
   if (toIdString(detailRaw.id) !== id.trim()) {
@@ -781,7 +798,7 @@ export async function getOlympusMangaReadData(
     getOlympusChapterData(
       {
         chapterId,
-        slug,
+        slug: resolvedSlug,
         type: 'comic',
       },
       signal,
@@ -1150,6 +1167,8 @@ export async function getOlympusChapterData(
       .filter((item): item is OlympusChapterData['recommendedSeries'][number] => Boolean(item)),
   }
 }
+
+
 
 
 

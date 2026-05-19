@@ -4,6 +4,7 @@ const OLYMPUS_DASHBOARD_BASE_URL = 'https://dashboard.olympusbiblioteca.com';
 const OLYMPUS_NOTICE = 'Olympus integrado desde la API publica del sitio. La lectura usa el endpoint real de capitulos para evitar hojas incompletas.';
 const OLYMPUS_HEADERS = {
     Accept: 'application/json, text/plain, */*',
+    Origin: OLYMPUS_BASE_URL,
     Referer: `${OLYMPUS_BASE_URL}/`,
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
 };
@@ -179,7 +180,7 @@ function mapRecommendedSeries(value) {
     return dedupeSummaries(parsed.map((item) => mapOlympusSeriesToSummary(item)));
 }
 async function requestOlympusJson(path, searchParams, signal) {
-    const url = new URL(path, OLYMPUS_DASHBOARD_BASE_URL);
+    const url = new URL(path, OLYMPUS_BASE_URL);
     for (const [key, value] of Object.entries(searchParams)) {
         if (value !== undefined && value !== null && `${value}`.trim()) {
             url.searchParams.set(key, String(value));
@@ -187,6 +188,35 @@ async function requestOlympusJson(path, searchParams, signal) {
     }
     const response = await fetch(url, {
         headers: OLYMPUS_HEADERS,
+        signal,
+    });
+    if (!response.ok) {
+        let message = response.statusText || 'Olympus respondio con un error.';
+        try {
+            const payload = (await response.json());
+            if (payload.message) {
+                message = payload.message;
+            }
+        }
+        catch {
+            // noop
+        }
+        throw new ApiError(message, response.status);
+    }
+    return (await response.json());
+}
+async function requestOlympusDashboardJson(path, searchParams, signal, refererUrl) {
+    const url = new URL(path, OLYMPUS_DASHBOARD_BASE_URL);
+    for (const [key, value] of Object.entries(searchParams)) {
+        if (value !== undefined && value !== null && `${value}`.trim()) {
+            url.searchParams.set(key, String(value));
+        }
+    }
+    const response = await fetch(url, {
+        headers: {
+            ...OLYMPUS_HEADERS,
+            Referer: refererUrl?.trim() || `${OLYMPUS_BASE_URL}/`,
+        },
         signal,
     });
     if (!response.ok) {
@@ -236,11 +266,11 @@ async function getOlympusSeriesDetailRaw(slug, signal) {
     return payload.data;
 }
 async function getOlympusSeriesChaptersPage(slug, page, signal) {
-    return requestOlympusJson(`/api/series/${encodeURIComponent(slug)}/chapters`, {
+    return requestOlympusDashboardJson(`/api/series/${encodeURIComponent(slug)}/chapters`, {
         page,
         direction: 'desc',
         type: 'comic',
-    }, signal);
+    }, signal, buildOlympusSourceUrl(slug));
 }
 async function getOlympusAllSeriesChapters(manga, signal) {
     const cacheKey = `series-chapters:${manga.slug}`;
@@ -367,8 +397,19 @@ async function getOlympusFullCatalog(signal) {
     fullCatalogCache = setCacheValue(deduped, FULL_CATALOG_TTL_MS);
     return deduped;
 }
+export async function getOlympusMangaCatalog(signal) {
+    return getOlympusFullCatalog(signal);
+}
 export function isOlympusMangaLibrary(libraryType) {
     return libraryType.trim().toLowerCase() === 'comic';
+}
+async function resolveOlympusSeriesSlug(id, slug, signal) {
+    const normalizedId = id.trim();
+    const normalizedSlug = slug.trim().toLowerCase();
+    const catalog = await getOlympusFullCatalog(signal);
+    const match = catalog.find((item) => item.id.trim() === normalizedId) ??
+        catalog.find((item) => item.slug.trim().toLowerCase() === normalizedSlug);
+    return match?.slug?.trim() || slug.trim();
 }
 export async function getOlympusMangaHome(signal) {
     const [seriesPage, recentGroups] = await Promise.all([
@@ -424,8 +465,9 @@ export async function getOlympusMangaDetail(libraryType, id, slug, signal) {
     if (!isOlympusMangaLibrary(libraryType)) {
         throw new ApiError('La serie no pertenece a Olympus.', 404);
     }
+    const resolvedSlug = await resolveOlympusSeriesSlug(id, slug, signal);
     const [detailRaw, seriesPage] = await Promise.all([
-        getOlympusSeriesDetailRaw(slug, signal),
+        getOlympusSeriesDetailRaw(resolvedSlug, signal),
         getOlympusSeriesPage(1, signal),
     ]);
     const summary = mapOlympusDetailToSummary(detailRaw);
@@ -447,7 +489,8 @@ export async function getOlympusMangaReadData(libraryType, id, slug, chapterId, 
     if (!isOlympusMangaLibrary(libraryType)) {
         throw new ApiError('La serie no pertenece a Olympus.', 404);
     }
-    const detailRaw = await getOlympusSeriesDetailRaw(slug, signal);
+    const resolvedSlug = await resolveOlympusSeriesSlug(id, slug, signal);
+    const detailRaw = await getOlympusSeriesDetailRaw(resolvedSlug, signal);
     const summary = mapOlympusDetailToSummary(detailRaw);
     if (toIdString(detailRaw.id) !== id.trim()) {
         throw new ApiError('La serie solicitada no coincide con Olympus.', 404);
@@ -456,7 +499,7 @@ export async function getOlympusMangaReadData(libraryType, id, slug, chapterId, 
         getOlympusAllSeriesChapters(summary, signal),
         getOlympusChapterData({
             chapterId,
-            slug,
+            slug: resolvedSlug,
             type: 'comic',
         }, signal),
     ]);
@@ -558,20 +601,40 @@ function getChapterTarget(options) {
         routePath: pathname,
     };
 }
-async function requestOlympusChapterPayload(url, signal) {
-    const response = await requestText(url, signal, {
-        headers: OLYMPUS_HEADERS,
-    });
+function extractNuxtDataPayloadFromHtml(html) {
+    const match = html.match(/<script type="application\/json" data-nuxt-data="nuxt-app"[^>]*id="__NUXT_DATA__">([\s\S]*?)<\/script>/i);
+    if (!match?.[1]) {
+        return null;
+    }
     try {
-        const payload = JSON.parse(response.bodyText);
-        if (!Array.isArray(payload)) {
-            throw new Error('Payload invalido');
-        }
-        return payload;
+        const payload = JSON.parse(match[1]);
+        return Array.isArray(payload) ? payload : null;
     }
     catch {
-        throw new ApiError('Olympus no devolvio un payload de capitulo valido.', 502);
+        return null;
     }
+}
+async function requestOlympusChapterPayload(payloadUrl, chapterUrl, signal) {
+    try {
+        const response = await requestText(payloadUrl, signal, {
+            headers: OLYMPUS_HEADERS,
+        });
+        const payload = JSON.parse(response.bodyText);
+        if (Array.isArray(payload)) {
+            return payload;
+        }
+    }
+    catch {
+        // Fallback below to the chapter HTML when Olympus skips _payload.json.
+    }
+    const chapterResponse = await requestText(chapterUrl, signal, {
+        headers: OLYMPUS_HTML_HEADERS,
+    });
+    const chapterPayload = extractNuxtDataPayloadFromHtml(chapterResponse.bodyText);
+    if (chapterPayload) {
+        return chapterPayload;
+    }
+    throw new ApiError('Olympus no devolvio un payload de capitulo valido.', 502);
 }
 function resolveChapterPayloadData(payload, routePath) {
     const routeRecord = payload.find((item) => {
@@ -610,7 +673,7 @@ function buildSeriesRouteSlug(type, seriesSlug) {
 }
 export async function getOlympusChapterData(options, signal) {
     const target = getChapterTarget(options);
-    const payload = await requestOlympusChapterPayload(target.payloadUrl, signal);
+    const payload = await requestOlympusChapterPayload(target.payloadUrl, target.chapterUrl, signal);
     const { chapter, comic, prevChapter, nextChapter } = resolveChapterPayloadData(payload, target.routePath);
     if (!chapter) {
         throw new ApiError('Olympus no devolvio la informacion del capitulo.', 502);
@@ -637,6 +700,7 @@ export async function getOlympusChapterData(options, signal) {
         ? chapter.pages
             .map((page) => readText(page))
             .filter((pageUrl) => Boolean(pageUrl))
+            .map((pageUrl) => (/^https?:\/\//i.test(pageUrl) ? pageUrl : buildSiteUrl(pageUrl)))
         : [];
     return {
         source: 'olympus',
