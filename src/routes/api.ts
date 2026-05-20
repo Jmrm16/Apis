@@ -16,6 +16,7 @@ import {
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js'
 import { getTmoChapterPages } from '../services/tmo.js'
 import { proxyAnimeVideoRequest, resolveAnimeVideoServer } from '../services/anime-video.js'
+import { getTudoramaCatalog, getTudoramaEpisodeDetail, getTudoramaHome, getTudoramaSeriesDetail, searchTudoramaSeries } from '../services/tudorama.js'
 import type { AnimeStatusCode, SearchOrder, SearchParams } from '../types/anime.js'
 
 interface SearchQuerystring {
@@ -143,6 +144,44 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     const data = await getSeriesDonghuaCatalog(toPositiveNumber(request.query.page, 1), request.signal)
     return reply.send({ success: true, data })
   })
+
+  app.get('/doramas/home', async (request, reply) => {
+    const data = await getTudoramaHome(request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Querystring: SearchQuerystring }>('/doramas/catalog', async (request, reply) => {
+    const data = await getTudoramaCatalog(toPositiveNumber(request.query.page, 1), request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Querystring: SearchQuerystring }>('/doramas/search', async (request, reply) => {
+    const data = await searchTudoramaSeries(
+      request.query.query?.trim() ?? '',
+      toPositiveNumber(request.query.page, 1),
+      request.signal,
+    )
+
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { slug: string } }>('/doramas/:slug', async (request, reply) => {
+    const data = await getTudoramaSeriesDetail(request.params.slug, request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { slug: string; episodeSlug: string } }>(
+    '/doramas/:slug/episode/:episodeSlug',
+    async (request, reply) => {
+      const data = await getTudoramaEpisodeDetail(
+        request.params.slug,
+        request.params.episodeSlug,
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
 
   app.get<{ Querystring: SearchQuerystring }>('/donghua/search', async (request, reply) => {
     const data = await searchSeriesDonghua(
@@ -504,16 +543,3 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
