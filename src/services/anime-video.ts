@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createDecipheriv, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { EpisodeServer } from '../types/anime.js'
@@ -62,9 +62,35 @@ const BLOCKED_MEDIA_URL_FRAGMENTS = [
   'banner',
   'advert',
 ]
+const MAX_PAGE_RESOLUTION_DEPTH = 3
+const BYSE_VIDEO_HOST_PATTERNS = ['byse.com', 'bysesukior.com']
 const RESOLVED_VIDEO_CACHE = new Map<string, ResolvedAnimeVideo | null>()
 const PROXY_TOKEN_TTL_MS = 30 * 60 * 1000
 const proxyTokenStore = new Map<string, ProxyTokenEntry>()
+
+interface BysePlaybackPayload {
+  algorithm?: string | null
+  iv?: string | null
+  payload?: string | null
+  iv2?: string | null
+  payload2?: string | null
+  key_parts?: string[] | null
+}
+
+interface ByseVideoSource {
+  url?: string | null
+  mime_type?: string | null
+  bitrate_kbps?: number | null
+  height?: number | null
+}
+
+interface ByseVideoResponse {
+  playback?: BysePlaybackPayload | null
+}
+
+interface DecryptedBysePlaybackPayload {
+  sources?: ByseVideoSource[] | null
+}
 
 function getUrlScheme(value?: string | null): string {
   const match = `${value ?? ''}`.trim().match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/)
@@ -92,6 +118,23 @@ function getNormalizedHost(value?: string | null): string | null {
 
   try {
     return new URL(value).hostname.trim().toLowerCase() || null
+  } catch {
+    return null
+  }
+}
+
+function decodeBase64UrlToBuffer(value?: string | null): Buffer | null {
+  const normalizedValue = `${value ?? ''}`.trim()
+
+  if (!normalizedValue) {
+    return null
+  }
+
+  const base64 = normalizedValue.replace(/-/g, '+').replace(/_/g, '/')
+  const padding = base64.length % 4 === 0 ? 0 : 4 - (base64.length % 4)
+
+  try {
+    return Buffer.from(`${base64}${'='.repeat(padding)}`, 'base64')
   } catch {
     return null
   }
@@ -151,6 +194,30 @@ function getContentTypeFromResponseHeader(value?: string | null): 'hls' | 'progr
   }
 
   return null
+}
+
+function matchesByseVideoHost(value?: string | null): boolean {
+  const host = getNormalizedHost(value)
+
+  if (!host) {
+    return false
+  }
+
+  return BYSE_VIDEO_HOST_PATTERNS.some((pattern) => hostMatchesPattern(host, pattern))
+}
+
+function extractByseVideoCode(value?: string | null): string | null {
+  if (!value || !matchesByseVideoHost(value)) {
+    return null
+  }
+
+  try {
+    const url = new URL(value)
+    const match = url.pathname.match(/^\/e\/([^/?#]+)/i)
+    return match?.[1]?.trim() || null
+  } catch {
+    return null
+  }
 }
 
 function normalizeExtractedValue(value: string): string {
@@ -301,6 +368,27 @@ function addExtractedCandidate(collection: Set<string>, rawValue?: string | null
   }
 }
 
+function addNestedPageCandidate(collection: Set<string>, rawValue?: string | null, baseUrl?: string | null) {
+  if (!rawValue) {
+    return
+  }
+
+  const normalizedValue = normalizeExtractedValue(rawValue)
+
+  try {
+    const url = new URL(normalizedValue, baseUrl ?? undefined)
+    const serializedUrl = url.toString()
+
+    if (!isHttpUrl(serializedUrl) || matchesBlockedMediaUrl(serializedUrl)) {
+      return
+    }
+
+    collection.add(serializedUrl)
+  } catch {
+    // ignore malformed nested page candidates
+  }
+}
+
 function extractDirectVideoCandidates(html: string, baseUrl: string): string[] {
   const matches = new Set<string>()
   const patterns = [
@@ -321,6 +409,28 @@ function extractDirectVideoCandidates(html: string, baseUrl: string): string[] {
 
     while ((match = pattern.exec(html)) !== null) {
       addExtractedCandidate(matches, match[1], baseUrl)
+    }
+  }
+
+  return Array.from(matches)
+}
+
+function extractNestedPageCandidates(html: string, baseUrl: string): string[] {
+  const matches = new Set<string>()
+  const patterns = [
+    /<iframe[^>]+src=["'`]([^"'`]+)["'`]/gi,
+    /iframe\.src\s*=\s*["'`]([^"'`]+)["'`]/gi,
+    /location\.href\s*=\s*["'`]([^"'`]+)["'`]/gi,
+    /["'`](https?:\/\/[^"'`\s<>]+\/e\/[^"'`\s<>]+)["'`]/gi,
+    /["'`](https?:\/\/[^"'`\s<>]+\/embed\/[^"'`\s<>]+)["'`]/gi,
+    /(https?:\\\/\\\/[^"'`\s<>]+\\\/e\\\/[^"'`\s<>]+)/gi,
+  ]
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null
+
+    while ((match = pattern.exec(html)) !== null) {
+      addNestedPageCandidate(matches, match[1], baseUrl)
     }
   }
 
@@ -360,6 +470,182 @@ function scoreCandidate(candidateUrl: string, pageUrl: string): number {
   return score
 }
 
+function scoreNestedPageCandidate(candidateUrl: string, pageUrl: string): number {
+  let score = 0
+  const lowerValue = candidateUrl.toLowerCase()
+  const candidateHost = getNormalizedHost(candidateUrl)
+  const pageHost = getNormalizedHost(pageUrl)
+  const candidateDomain = getRegistrableDomain(candidateHost)
+  const pageDomain = getRegistrableDomain(pageHost)
+
+  if (matchesByseVideoHost(candidateUrl)) {
+    score += 80
+  }
+
+  if (lowerValue.includes('/e/')) {
+    score += 40
+  }
+
+  if (lowerValue.includes('/embed/')) {
+    score += 24
+  }
+
+  if (candidateHost && pageHost && candidateHost === pageHost) {
+    score += 20
+  } else if (candidateDomain && pageDomain && candidateDomain === pageDomain) {
+    score += 12
+  }
+
+  if (matchesBlockedMediaUrl(candidateUrl)) {
+    score -= 100
+  }
+
+  return score
+}
+
+function decryptBysePlaybackPayload(playback?: BysePlaybackPayload | null): DecryptedBysePlaybackPayload | null {
+  if (!playback?.key_parts?.length) {
+    return null
+  }
+
+  const key = Buffer.concat(
+    playback.key_parts
+      .map((part) => decodeBase64UrlToBuffer(part))
+      .filter((part): part is Buffer => Boolean(part)),
+  )
+
+  if (key.length !== 32) {
+    return null
+  }
+
+  const candidates = [
+    { iv: playback.iv, payload: playback.payload },
+    { iv: playback.iv2, payload: playback.payload2 },
+  ]
+
+  for (const candidate of candidates) {
+    const iv = decodeBase64UrlToBuffer(candidate.iv)
+    const encryptedPayload = decodeBase64UrlToBuffer(candidate.payload)
+
+    if (!iv || !encryptedPayload || encryptedPayload.length <= 16) {
+      continue
+    }
+
+    try {
+      const authTag = encryptedPayload.subarray(encryptedPayload.length - 16)
+      const ciphertext = encryptedPayload.subarray(0, encryptedPayload.length - 16)
+      const decipher = createDecipheriv('aes-256-gcm', key, iv)
+      decipher.setAuthTag(authTag)
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
+      return JSON.parse(plaintext) as DecryptedBysePlaybackPayload
+    } catch {
+      // try the next payload candidate
+    }
+  }
+
+  return null
+}
+
+function pickBestByseSource(payload?: DecryptedBysePlaybackPayload | null): {
+  url: string
+  contentType: 'hls' | 'progressive'
+} | null {
+  const sources = Array.isArray(payload?.sources) ? payload.sources : []
+
+  const rankedSources = sources
+    .map((source) => {
+      const playableUrl = getPlayableVideoUrlWithBase(source.url)
+
+      if (!playableUrl) {
+        return null
+      }
+
+      let score = 0
+      const lowerMimeType = `${source.mime_type ?? ''}`.trim().toLowerCase()
+
+      if (lowerMimeType.includes('mpegurl')) {
+        score += 70
+      } else if (lowerMimeType.startsWith('video/')) {
+        score += 40
+      }
+
+      if (Number.isFinite(source.bitrate_kbps)) {
+        score += Number(source.bitrate_kbps) / 25
+      }
+
+      if (Number.isFinite(source.height)) {
+        score += Number(source.height) / 10
+      }
+
+      return {
+        url: playableUrl,
+        contentType:
+          lowerMimeType.includes('mpegurl') || playableUrl.toLowerCase().includes('.m3u8')
+            ? 'hls'
+            : 'progressive',
+        score,
+      }
+    })
+    .filter((source): source is { url: string; contentType: 'hls' | 'progressive'; score: number } => Boolean(source))
+    .sort((left, right) => right.score - left.score)
+
+  const bestSource = rankedSources[0]
+
+  if (!bestSource) {
+    return null
+  }
+
+  return {
+    url: bestSource.url,
+    contentType: bestSource.contentType,
+  }
+}
+
+async function resolveByseVideoPage(
+  pageUrl: string,
+  resolvedFrom: 'download' | 'embed',
+  signal?: AbortSignal,
+): Promise<{ url: string; referer: string; contentType: 'hls' | 'progressive'; resolvedFrom: 'download' | 'embed' } | null> {
+  const videoCode = extractByseVideoCode(pageUrl)
+
+  if (!videoCode) {
+    return null
+  }
+
+  let apiUrl: string
+
+  try {
+    apiUrl = new URL(`/api/videos/${encodeURIComponent(videoCode)}/`, new URL(pageUrl).origin).toString()
+  } catch {
+    return null
+  }
+
+  const response = await fetch(apiUrl, {
+    headers: buildFetchHeaders(pageUrl, 'application/json,*/*;q=0.8'),
+    redirect: 'follow',
+    signal,
+  })
+
+  if (!response.ok) {
+    return null
+  }
+
+  const payload = (await response.json()) as ByseVideoResponse
+  const decryptedPayload = decryptBysePlaybackPayload(payload.playback)
+  const bestSource = pickBestByseSource(decryptedPayload)
+
+  if (!bestSource) {
+    return null
+  }
+
+  return {
+    url: bestSource.url,
+    referer: pageUrl,
+    contentType: bestSource.contentType,
+    resolvedFrom,
+  }
+}
+
 function purgeExpiredProxyTokens() {
   const now = Date.now()
 
@@ -390,9 +676,21 @@ async function tryResolveCandidatePage(
   pageUrl: string,
   resolvedFrom: 'download' | 'embed',
   signal?: AbortSignal,
+  depth = 0,
+  visited = new Set<string>(),
 ): Promise<{ url: string; referer: string; contentType: 'hls' | 'progressive'; resolvedFrom: 'download' | 'embed' } | null> {
-  if (!isHttpUrl(pageUrl)) {
+  if (!isHttpUrl(pageUrl) || depth > MAX_PAGE_RESOLUTION_DEPTH || visited.has(pageUrl)) {
     return null
+  }
+
+  visited.add(pageUrl)
+
+  if (matchesByseVideoHost(pageUrl)) {
+    const byseResolvedVideo = await resolveByseVideoPage(pageUrl, resolvedFrom, signal)
+
+    if (byseResolvedVideo) {
+      return byseResolvedVideo
+    }
   }
 
   const response = await fetch(pageUrl, {
@@ -417,22 +715,50 @@ async function tryResolveCandidatePage(
     }
   }
 
+  visited.add(finalUrl)
+
+  if (matchesByseVideoHost(finalUrl)) {
+    const byseResolvedVideo = await resolveByseVideoPage(finalUrl, resolvedFrom, signal)
+
+    if (byseResolvedVideo) {
+      return byseResolvedVideo
+    }
+  }
+
   const html = await response.text()
   const extractedCandidates = extractDirectVideoCandidates(html, finalUrl).sort(
     (left, right) => scoreCandidate(right, finalUrl) - scoreCandidate(left, finalUrl),
   )
   const bestCandidate = extractedCandidates[0]
 
-  if (!bestCandidate) {
-    return null
+  const nestedCandidates = extractNestedPageCandidates(html, finalUrl).sort(
+    (left, right) => scoreNestedPageCandidate(right, finalUrl) - scoreNestedPageCandidate(left, finalUrl),
+  )
+
+  if (bestCandidate) {
+    return {
+      url: bestCandidate,
+      referer: finalUrl,
+      contentType: getDirectVideoContentType(bestCandidate),
+      resolvedFrom,
+    }
   }
 
-  return {
-    url: bestCandidate,
-    referer: finalUrl,
-    contentType: getDirectVideoContentType(bestCandidate),
-    resolvedFrom,
+  for (const nestedCandidate of nestedCandidates) {
+    const resolvedVideo = await tryResolveCandidatePage(
+      nestedCandidate,
+      resolvedFrom,
+      signal,
+      depth + 1,
+      visited,
+    )
+
+    if (resolvedVideo) {
+      return resolvedVideo
+    }
   }
+
+  return null
 }
 
 export async function resolveAnimeVideoServer(server?: EpisodeServer | null, signal?: AbortSignal): Promise<ResolvedAnimeVideo | null> {
