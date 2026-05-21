@@ -5,10 +5,11 @@ import { createMangaChapterPdf } from '../services/manga-pdf.js';
 import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, getDonghuaLifeRecentEpisodes, searchDonghuaLife } from '../services/donghua-life.js';
 import { getOlympusChapterData } from '../services/olympus.js';
 import { getNamiComiMangaDetail, getNamiComiMangaHome, getNamiComiMangaReadData, searchNamiComiManga } from '../services/namicomi.js';
-import { getMangaDexMangaDetail, getMangaDexMangaHome, getMangaDexMangaReadData, searchMangaDexManga } from '../services/mangadex.js';
 import { getSeriesDonghuaCatalog, getSeriesDonghuaDetail, getSeriesDonghuaEpisode, getSeriesDonghuaRecentEpisodes, searchSeriesDonghua, } from '../services/series-donghua.js';
 import { getTmoChapterPagesWithBrowser } from '../services/tmo-browser.js';
 import { getTmoChapterPages } from '../services/tmo.js';
+import { proxyAnimeVideoRequest, resolveAnimeVideoServer } from '../services/anime-video.js';
+import { getTudoramaCatalog, getTudoramaEpisodeDetail, getTudoramaHome, getTudoramaSeriesDetail, searchTudoramaSeries } from '../services/tudorama.js';
 function toPositiveNumber(value, fallback) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -62,6 +63,26 @@ export const apiRoutes = async (app) => {
     });
     app.get('/donghua/catalog', async (request, reply) => {
         const data = await getSeriesDonghuaCatalog(toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/doramas/home', async (request, reply) => {
+        const data = await getTudoramaHome(request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/doramas/catalog', async (request, reply) => {
+        const data = await getTudoramaCatalog(toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/doramas/search', async (request, reply) => {
+        const data = await searchTudoramaSeries(request.query.query?.trim() ?? '', toPositiveNumber(request.query.page, 1), request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/doramas/:slug', async (request, reply) => {
+        const data = await getTudoramaSeriesDetail(request.params.slug, request.signal);
+        return reply.send({ success: true, data });
+    });
+    app.get('/doramas/:slug/episode/:episodeSlug', async (request, reply) => {
+        const data = await getTudoramaEpisodeDetail(request.params.slug, request.params.episodeSlug, request.signal);
         return reply.send({ success: true, data });
     });
     app.get('/donghua/search', async (request, reply) => {
@@ -131,6 +152,31 @@ export const apiRoutes = async (app) => {
         const data = await provider.getEpisodeByNumber(request.params.slug, toPositiveNumber(request.params.number, 1), request.signal);
         return reply.send({ success: true, data });
     });
+    app.post('/anime/video/resolve', async (request, reply) => {
+        try {
+            const rawServer = request.body?.server;
+            if (!rawServer?.name?.trim()) {
+                return reply.status(400).send({
+                    success: false,
+                    error: 'Missing server payload.',
+                });
+            }
+            const data = await resolveAnimeVideoServer({
+                name: rawServer.name.trim(),
+                download: rawServer.download?.trim() || null,
+                embed: rawServer.embed?.trim() || null,
+            }, request.signal);
+            return reply.send({ success: true, data });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : 'No pude resolver el video en este momento.';
+            return reply.status(500).send({
+                success: false,
+                error: message,
+            });
+        }
+    });
+    app.get('/anime/video/proxy/:token', async (request, reply) => proxyAnimeVideoRequest(request, reply));
     app.get('/mihon/sources', async (request, reply) => {
         const normalizedNsfw = request.query.nsfw === 'all' || request.query.nsfw === 'nsfw'
             ? request.query.nsfw
@@ -162,22 +208,6 @@ export const apiRoutes = async (app) => {
     app.delete('/mihon/catalogs/:catalogId', async (request, reply) => {
         await removeMihonImportedCatalog(request.params.catalogId);
         return reply.send({ success: true, data: { ok: true } });
-    });
-    app.get('/manga/mangadex/home', async (request, reply) => {
-        const data = await getMangaDexMangaHome(request.signal);
-        return reply.send({ success: true, data });
-    });
-    app.get('/manga/mangadex/search', async (request, reply) => {
-        const data = await searchMangaDexManga(request.query.query ?? '', request.signal);
-        return reply.send({ success: true, data });
-    });
-    app.get('/manga/mangadex/:id/:slug/chapter/:chapterId', async (request, reply) => {
-        const data = await getMangaDexMangaReadData('mangadex__comic', request.params.id, request.params.slug, request.params.chapterId, request.signal);
-        return reply.send({ success: true, data });
-    });
-    app.get('/manga/mangadex/:id/:slug', async (request, reply) => {
-        const data = await getMangaDexMangaDetail('mangadex__comic', request.params.id, request.params.slug, request.signal);
-        return reply.send({ success: true, data });
     });
     app.get('/manga/namicomi/home', async (request, reply) => {
         const data = await getNamiComiMangaHome(request.signal);
