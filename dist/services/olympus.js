@@ -1,7 +1,7 @@
 import { ApiError, requestText } from '../lib/http.js';
-const OLYMPUS_BASE_URL = 'https://olympusbiblioteca.com';
-const OLYMPUS_DASHBOARD_BASE_URL = 'https://dashboard.olympusbiblioteca.com';
-const OLYMPUS_NOTICE = 'Olympus integrado desde la API publica del sitio. La lectura usa el endpoint real de capitulos para evitar hojas incompletas.';
+const OLYMPUS_BASE_URL = 'https://olympusxyz.com';
+const OLYMPUS_DASHBOARD_BASE_URL = 'https://panel.olympusxyz.com';
+const OLYMPUS_NOTICE = 'Olympus integrado desde la API publica del sitio. Los capitulos usan reintentos y cache de respaldo para resistir fallos temporales del panel.';
 const OLYMPUS_HEADERS = {
     Accept: 'application/json, text/plain, */*',
     Origin: OLYMPUS_BASE_URL,
@@ -17,6 +17,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const FULL_CATALOG_TTL_MS = 10 * 60 * 1000;
 const FULL_CATALOG_BATCH_SIZE = 6;
 const CHAPTERS_BATCH_SIZE = 4;
+const OLYMPUS_RETRY_DELAYS_MS = [250, 700];
 const seriesPageCache = new Map();
 const seriesDetailCache = new Map();
 const seriesChaptersCache = new Map();
@@ -31,11 +32,78 @@ function getCacheValue(entry) {
     }
     return entry.value;
 }
+function getStaleCacheValue(entry) {
+    return entry?.value ?? null;
+}
 function setCacheValue(value, ttlMs = CACHE_TTL_MS) {
     return {
         expiresAt: Date.now() + ttlMs,
         value,
     };
+}
+function isAbortError(error, signal) {
+    return Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError');
+}
+function isRetryableOlympusStatus(statusCode) {
+    return statusCode === 408 || statusCode === 425 || statusCode === 429 || statusCode >= 500;
+}
+async function waitForOlympusRetry(delayMs, signal) {
+    if (signal?.aborted) {
+        throw new ApiError('La solicitud fue cancelada.', 499);
+    }
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, delayMs);
+        signal?.addEventListener('abort', () => {
+            clearTimeout(timeout);
+            reject(new ApiError('La solicitud fue cancelada.', 499));
+        }, { once: true });
+    });
+}
+async function readOlympusError(response) {
+    let message = response.statusText || 'Olympus respondio con un error.';
+    try {
+        const payload = (await response.json());
+        if (payload.message) {
+            message = payload.message;
+        }
+    }
+    catch {
+        // La respuesta de mantenimiento puede ser HTML.
+    }
+    return new ApiError(message, response.status);
+}
+async function fetchOlympusJson(url, headers, signal) {
+    let lastError;
+    for (let attempt = 0; attempt <= OLYMPUS_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+            const response = await fetch(url, { headers, signal });
+            if (response.ok) {
+                return (await response.json());
+            }
+            const responseError = await readOlympusError(response);
+            if (!isRetryableOlympusStatus(response.status) || attempt >= OLYMPUS_RETRY_DELAYS_MS.length) {
+                throw responseError;
+            }
+            lastError = responseError;
+        }
+        catch (error) {
+            if (isAbortError(error, signal)) {
+                throw new ApiError('La solicitud fue cancelada.', 499);
+            }
+            if (error instanceof ApiError && !isRetryableOlympusStatus(error.statusCode)) {
+                throw error;
+            }
+            lastError = error;
+            if (attempt >= OLYMPUS_RETRY_DELAYS_MS.length) {
+                break;
+            }
+        }
+        await waitForOlympusRetry(OLYMPUS_RETRY_DELAYS_MS[attempt] ?? 700, signal);
+    }
+    if (lastError instanceof ApiError) {
+        throw lastError;
+    }
+    throw new ApiError('Olympus no respondio despues de varios intentos.', 502);
 }
 function normalizeWhitespace(value) {
     return value.replace(/\s+/g, ' ').trim();
@@ -186,24 +254,7 @@ async function requestOlympusJson(path, searchParams, signal) {
             url.searchParams.set(key, String(value));
         }
     }
-    const response = await fetch(url, {
-        headers: OLYMPUS_HEADERS,
-        signal,
-    });
-    if (!response.ok) {
-        let message = response.statusText || 'Olympus respondio con un error.';
-        try {
-            const payload = (await response.json());
-            if (payload.message) {
-                message = payload.message;
-            }
-        }
-        catch {
-            // noop
-        }
-        throw new ApiError(message, response.status);
-    }
-    return (await response.json());
+    return fetchOlympusJson(url, OLYMPUS_HEADERS, signal);
 }
 async function requestOlympusDashboardJson(path, searchParams, signal, refererUrl) {
     const url = new URL(path, OLYMPUS_DASHBOARD_BASE_URL);
@@ -212,27 +263,10 @@ async function requestOlympusDashboardJson(path, searchParams, signal, refererUr
             url.searchParams.set(key, String(value));
         }
     }
-    const response = await fetch(url, {
-        headers: {
-            ...OLYMPUS_HEADERS,
-            Referer: refererUrl?.trim() || `${OLYMPUS_BASE_URL}/`,
-        },
-        signal,
-    });
-    if (!response.ok) {
-        let message = response.statusText || 'Olympus respondio con un error.';
-        try {
-            const payload = (await response.json());
-            if (payload.message) {
-                message = payload.message;
-            }
-        }
-        catch {
-            // noop
-        }
-        throw new ApiError(message, response.status);
-    }
-    return (await response.json());
+    return fetchOlympusJson(url, {
+        ...OLYMPUS_HEADERS,
+        Referer: refererUrl?.trim() || `${OLYMPUS_BASE_URL}/`,
+    }, signal);
 }
 async function getOlympusSeriesPage(page = 1, signal) {
     const cacheKey = `series-page:${page}`;
@@ -278,27 +312,49 @@ async function getOlympusAllSeriesChapters(manga, signal) {
     if (cached) {
         return cached;
     }
-    const firstPage = await getOlympusSeriesChaptersPage(manga.slug, 1, signal);
+    const staleChapters = getStaleCacheValue(seriesChaptersCache.get(cacheKey));
+    let firstPage;
+    try {
+        firstPage = await getOlympusSeriesChaptersPage(manga.slug, 1, signal);
+    }
+    catch (error) {
+        if (staleChapters?.length) {
+            return staleChapters;
+        }
+        throw error;
+    }
     const rawChapters = [...firstPage.data];
+    let hasIncompletePages = false;
     if (firstPage.meta.last_page > 1) {
         for (let start = 2; start <= firstPage.meta.last_page; start += CHAPTERS_BATCH_SIZE) {
             if (signal?.aborted) {
                 throw new ApiError('La solicitud fue cancelada.', 499);
             }
             const batchPages = Array.from({ length: Math.min(CHAPTERS_BATCH_SIZE, firstPage.meta.last_page - start + 1) }, (_, index) => start + index);
-            const batch = await Promise.all(batchPages.map((page) => getOlympusSeriesChaptersPage(manga.slug, page, signal)));
+            const batch = await Promise.allSettled(batchPages.map((page) => getOlympusSeriesChaptersPage(manga.slug, page, signal)));
             for (const page of batch) {
-                rawChapters.push(...page.data);
+                if (page.status === 'fulfilled') {
+                    rawChapters.push(...page.value.data);
+                }
+                else {
+                    hasIncompletePages = true;
+                }
             }
         }
     }
-    const chapters = rawChapters
-        .map((chapter) => createOlympusChapterSummary(manga, chapter))
-        .sort((left, right) => {
+    const freshChapters = rawChapters
+        .map((chapter) => createOlympusChapterSummary(manga, chapter));
+    const chapterLookup = new Map();
+    for (const chapter of hasIncompletePages ? [...(staleChapters ?? []), ...freshChapters] : freshChapters) {
+        chapterLookup.set(chapter.id, chapter);
+    }
+    const chapters = Array.from(chapterLookup.values()).sort((left, right) => {
         return (chapterSortValue(left.shortTitle.replace(/^Capitulo\s+/i, ''), left.id) -
             chapterSortValue(right.shortTitle.replace(/^Capitulo\s+/i, ''), right.id));
     });
-    seriesChaptersCache.set(cacheKey, setCacheValue(chapters));
+    if (chapters.length > 0) {
+        seriesChaptersCache.set(cacheKey, setCacheValue(chapters));
+    }
     return chapters;
 }
 function extractMangaIdFromCover(cover, fallbackSlug) {
