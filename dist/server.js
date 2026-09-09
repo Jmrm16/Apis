@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import { env } from './config/env.js';
 import { ApiError } from './lib/http.js';
 import { apiRoutes } from './routes/api.js';
+import { mangaImageRoutes } from './routes/manga-images.js';
 const app = Fastify({
     logger: true,
 });
@@ -31,6 +32,7 @@ async function bootstrap() {
         },
     }));
     await app.register(apiRoutes, { prefix: '/api' });
+    await app.register(mangaImageRoutes, { prefix: '/api' });
     await app.listen({
         host: env.host,
         port: env.port,
