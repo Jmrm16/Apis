@@ -19,13 +19,15 @@ interface ImageRouteOptions {
   upstreamFetch?: typeof fetch
 }
 
+type ImageSource = 'manhwaweb' | 'imperiomanhua'
+
 interface DownloadWaiter {
   resolve: () => void
   reject: (error: Error) => void
   timeout: ReturnType<typeof setTimeout>
 }
 
-function validateImageUrl(value?: string): string {
+function validateImageUrl(value: string | undefined, source: ImageSource): string {
   let url: URL
   try {
     url = new URL(value ?? '')
@@ -33,24 +35,49 @@ function validateImageUrl(value?: string): string {
     throw new ApiError('La direccion de la pagina no es valida.', 400)
   }
 
-  if (
-    url.protocol !== 'https:' || url.hostname !== 'img2mw.xyz' ||
-    url.port || url.username || url.password || url.search || url.hash ||
-    !url.pathname.startsWith('/manhwas/') ||
-    !/\.(?:jpe?g|png|webp|avif|gif)$/i.test(url.pathname)
-  ) {
-    throw new ApiError('Esta direccion no es una pagina de ManhwaWeb permitida.', 400)
+  const isValidManhwaWebImage =
+    url.protocol === 'https:' &&
+    url.hostname === 'img2mw.xyz' &&
+    !url.port &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    url.pathname.startsWith('/manhwas/') &&
+    /\.(?:jpe?g|png|webp|avif|gif)$/i.test(url.pathname)
+  const isValidImperioImage =
+    url.protocol === 'https:' &&
+    url.hostname === 'imperiomanhua.com' &&
+    !url.port &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    url.pathname.startsWith('/wp-content/uploads/WP-manga/data/') &&
+    /\.(?:jpe?g|png|webp|avif|gif)$/i.test(url.pathname)
+
+  if ((source === 'manhwaweb' && !isValidManhwaWebImage) || (source === 'imperiomanhua' && !isValidImperioImage)) {
+    throw new ApiError(
+      source === 'manhwaweb'
+        ? 'Esta direccion no es una pagina de ManhwaWeb permitida.'
+        : 'Esta direccion no es una pagina de ImperioManhua permitida.',
+      400,
+    )
   }
   return url.toString()
 }
 
-async function downloadImage(url: string, upstreamFetch: typeof fetch): Promise<CachedImage> {
+async function downloadImage(
+  url: string,
+  source: ImageSource,
+  upstreamFetch: typeof fetch,
+): Promise<CachedImage> {
   const response = await upstreamFetch(url, {
     redirect: 'manual',
     signal: AbortSignal.timeout(25_000),
     headers: {
       Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif',
-      Referer: 'https://manhwaweb.com/',
+      Referer: source === 'manhwaweb' ? 'https://manhwaweb.com/' : 'https://imperiomanhua.com/',
       'User-Agent': 'Mozilla/5.0',
     },
   })
@@ -132,50 +159,55 @@ export const mangaImageRoutes: FastifyPluginAsync<ImageRouteOptions> = async (ap
     cacheBytes -= image.body.byteLength
   }
 
-  app.get<{ Querystring: { url?: string } }>('/manga/manhwaweb/image', async (request, reply) => {
-    reply.header('Cache-Control', 'no-store')
-    const url = validateImageUrl(request.query.url)
-    for (const [key, image] of cache) {
-      if (image.expiresAt <= Date.now()) removeCached(key, image)
-    }
-    let image = cache.get(url)
-    if (image) {
-      cache.delete(url)
-      cache.set(url, image)
-    } else {
-      let download = pending.get(url)
-      if (!download) {
-        download = (async () => {
-          let acquired = false
-          try {
-            await acquireDownloadSlot()
-            acquired = true
-            const result = await downloadImage(url, upstreamFetch)
-            for (const [key, cached] of cache) {
-              if (cacheBytes + result.body.byteLength <= MAX_CACHE_BYTES) break
-              removeCached(key, cached)
+  function registerImageRoute(path: string, source: ImageSource) {
+    app.get<{ Querystring: { url?: string } }>(path, async (request, reply) => {
+      reply.header('Cache-Control', 'no-store')
+      const url = validateImageUrl(request.query.url, source)
+      for (const [key, image] of cache) {
+        if (image.expiresAt <= Date.now()) removeCached(key, image)
+      }
+      let image = cache.get(url)
+      if (image) {
+        cache.delete(url)
+        cache.set(url, image)
+      } else {
+        let download = pending.get(url)
+        if (!download) {
+          download = (async () => {
+            let acquired = false
+            try {
+              await acquireDownloadSlot()
+              acquired = true
+              const result = await downloadImage(url, source, upstreamFetch)
+              for (const [key, cached] of cache) {
+                if (cacheBytes + result.body.byteLength <= MAX_CACHE_BYTES) break
+                removeCached(key, cached)
+              }
+              cache.set(url, result)
+              cacheBytes += result.body.byteLength
+              return result
+            } finally {
+              if (acquired) releaseDownloadSlot()
+              pending.delete(url)
             }
-            cache.set(url, result)
-            cacheBytes += result.body.byteLength
-            return result
-          } finally {
-            if (acquired) releaseDownloadSlot()
-            pending.delete(url)
-          }
-        })()
-        pending.set(url, download)
+          })()
+          pending.set(url, download)
+        }
+        try {
+          image = await download
+        } catch (error) {
+          if (error instanceof ApiError) throw error
+          throw new ApiError('No se pudo cargar esta pagina. Reintenta en unos segundos.', 502)
+        }
       }
-      try {
-        image = await download
-      } catch (error) {
-        if (error instanceof ApiError) throw error
-        throw new ApiError('No se pudo cargar esta pagina. Reintenta en unos segundos.', 502)
-      }
-    }
-    return reply
-      .header('Cache-Control', 'public, max-age=300')
-      .header('X-Content-Type-Options', 'nosniff')
-      .type(image.contentType)
-      .send(image.body)
-  })
+      return reply
+        .header('Cache-Control', 'public, max-age=300')
+        .header('X-Content-Type-Options', 'nosniff')
+        .type(image.contentType)
+        .send(image.body)
+    })
+  }
+
+  registerImageRoute('/manga/manhwaweb/image', 'manhwaweb')
+  registerImageRoute('/manga/imperiomanhua/image', 'imperiomanhua')
 }

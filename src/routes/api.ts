@@ -7,6 +7,12 @@ import { getDonghuaLifeCatalog, getDonghuaLifeDetail, getDonghuaLifeEpisode, get
 import { getOlympusChapterData } from '../services/olympus.js'
 import { getNamiComiMangaDetail, getNamiComiMangaHome, getNamiComiMangaReadData, searchNamiComiManga } from '../services/namicomi.js'
 import {
+  getImperioManhuaMangaDetail,
+  getImperioManhuaMangaHome,
+  getImperioManhuaMangaReadData,
+  searchImperioManhuaManga,
+} from '../services/imperiomanhua.js'
+import {
   getSeriesDonghuaCatalog,
   getSeriesDonghuaDetail,
   getSeriesDonghuaEpisode,
@@ -406,6 +412,40 @@ export const apiRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { id: string; slug: string } }>('/manga/namicomi/:id/:slug', async (request, reply) => {
     const data = await getNamiComiMangaDetail(
+      request.params.id,
+      request.params.slug,
+      request.signal,
+    )
+
+    return reply.send({ success: true, data })
+  })
+
+  app.get('/manga/imperiomanhua/home', async (request, reply) => {
+    const data = await getImperioManhuaMangaHome(request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Querystring: MangaSearchQuerystring }>('/manga/imperiomanhua/search', async (request, reply) => {
+    const data = await searchImperioManhuaManga(request.query.query ?? '', request.signal)
+    return reply.send({ success: true, data })
+  })
+
+  app.get<{ Params: { id: string; slug: string; chapterId: string } }>(
+    '/manga/imperiomanhua/:id/:slug/chapter/:chapterId',
+    async (request, reply) => {
+      const data = await getImperioManhuaMangaReadData(
+        request.params.id,
+        request.params.slug,
+        request.params.chapterId,
+        request.signal,
+      )
+
+      return reply.send({ success: true, data })
+    },
+  )
+
+  app.get<{ Params: { id: string; slug: string } }>('/manga/imperiomanhua/:id/:slug', async (request, reply) => {
+    const data = await getImperioManhuaMangaDetail(
       request.params.id,
       request.params.slug,
       request.signal,
