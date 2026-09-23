@@ -625,7 +625,9 @@ async function getOlympusAllSeriesChapters(
 }
 
 function extractMangaIdFromCover(cover: string, fallbackSlug: string): string {
-  const match = cover.match(/\/storage\/comics\/covers\/(\d+)\//i)
+  // Olympus moved cover files from /storage/comics/... to media.imagesolymp.xyz/comics/....
+  // Both URLs carry the numeric series id required by the detail and reader routes.
+  const match = cover.match(/\/(?:storage\/)?comics\/covers\/(\d+)\//i)
   return match?.[1] ?? fallbackSlug
 }
 
