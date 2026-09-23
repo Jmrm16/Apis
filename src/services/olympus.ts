@@ -75,6 +75,10 @@ interface OlympusSeriesPageResponse {
   }
 }
 
+interface OlympusSeriesListResponse {
+  data: OlympusSeriesRaw[]
+}
+
 interface OlympusGenreRaw {
   id: number | string
   name: string
@@ -160,6 +164,7 @@ const seriesDetailCache = new Map<string, CacheEntry<OlympusSeriesDetailRaw>>()
 const seriesChaptersCache = new Map<string, CacheEntry<MangaChapterSummary[]>>()
 let recentSeriesCache: CacheEntry<OlympusRecentSeriesGroup[]> | null = null
 let fullCatalogCache: CacheEntry<MangaSummary[]> | null = null
+let seriesListCache: CacheEntry<OlympusSeriesRaw[]> | null = null
 
 function getCacheValue<T>(entry: CacheEntry<T> | null | undefined): T | null {
   if (!entry) {
@@ -631,6 +636,17 @@ function extractMangaIdFromCover(cover: string, fallbackSlug: string): string {
   return match?.[1] ?? fallbackSlug
 }
 
+async function getOlympusSeriesList(signal?: AbortSignal): Promise<OlympusSeriesRaw[]> {
+  const cached = getCacheValue(seriesListCache)
+  if (cached) {
+    return cached
+  }
+
+  const payload = await requestOlympusJson<OlympusSeriesListResponse>('/api/series/list', {}, signal)
+  seriesListCache = setCacheValue(payload.data)
+  return payload.data
+}
+
 function parseRecentChapterGroups(html: string): OlympusRecentSeriesGroup[] {
   const groups = html
     .split('<div class="bg-gray-800 p-4 rounded-xl relative">')
@@ -755,6 +771,22 @@ async function resolveOlympusSeriesSlug(
 ): Promise<string> {
   const normalizedId = id.trim()
   const normalizedSlug = slug.trim().toLowerCase()
+
+  // Olympus appends a new timestamp to some slugs every day.  The compact list
+  // is the current source of truth, so use it before the paginated catalog.
+  try {
+    const liveSeries = await getOlympusSeriesList(signal)
+    const liveMatch =
+      liveSeries.find((item) => toIdString(item.id) === normalizedId) ??
+      liveSeries.find((item) => item.slug.trim().toLowerCase() === normalizedSlug)
+
+    if (liveMatch?.slug?.trim()) {
+      return liveMatch.slug.trim()
+    }
+  } catch {
+    // The full catalog below remains a fallback when Olympus temporarily blocks the list.
+  }
+
   const catalog = await getOlympusFullCatalog(signal)
   const match =
     catalog.find((item) => item.id.trim() === normalizedId) ??
