@@ -12,6 +12,7 @@ import type {
 const SERIES_DONGHUA_BASE_URL = 'https://seriesdonghua.com'
 const SERIES_DONGHUA_ON_AIR_URL = `${SERIES_DONGHUA_BASE_URL}/donghuas-en-emision`
 const SERIES_DONGHUA_CATALOG_URL = `${SERIES_DONGHUA_BASE_URL}/todos-los-donghuas`
+const SERIES_DONGHUA_RECENT_URL = `${SERIES_DONGHUA_BASE_URL}/episodios`
 
 function decodeHtmlEntities(value: string): string {
   return value
@@ -30,6 +31,17 @@ function stripTags(value: string): string {
 
 function normalizeText(value: string): string {
   return decodeHtmlEntities(stripTags(value)).replace(/\s+/g, ' ').trim()
+}
+
+function readAttribute(tag: string, name: string): string {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return tag.match(new RegExp(`${escapedName}=["']([^"']+)["']`, 'i'))?.[1]?.trim() ?? ''
+}
+
+function extractCardBlocks(html: string, requiredClass = 'donghua-card'): string[] {
+  return Array.from(html.matchAll(/<article\b[^>]*class=["']([^"']*)["'][^>]*>[\s\S]*?<\/article>/gi))
+    .filter((match) => match[1]?.split(/\s+/).includes(requiredClass))
+    .map((match) => match[0])
 }
 
 function toAbsoluteUrl(value: string): string {
@@ -176,9 +188,101 @@ function parseVideoMap(unpackedScript: string): Record<string, string> {
   return normalizedMap
 }
 
+interface ModernPlayerOption {
+  name: string
+  videoId: number
+  serverIndex: number
+}
+
+function parseModernPlayerOptions(html: string): ModernPlayerOption[] {
+  const options: ModernPlayerOption[] = []
+
+  for (const match of html.matchAll(/<button\b[^>]*class=["'][^"']*server-tab-btn[^"']*["'][^>]*>[\s\S]*?<\/button>/gi)) {
+    const button = match[0]
+    const openingTag = button.match(/<button\b[^>]*>/i)?.[0] ?? ''
+    const videoId = Number(readAttribute(openingTag, 'data-video-id'))
+    const serverIndex = Number(readAttribute(openingTag, 'data-server-index'))
+    const name = normalizeText(
+      button.match(/<span(?![^>]*server-badge)[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '',
+    )
+
+    if (!name || !Number.isFinite(videoId) || !Number.isFinite(serverIndex)) {
+      continue
+    }
+
+    options.push({ name, videoId, serverIndex })
+  }
+
+  return options
+}
+
+function buildCookieHeader(headers: Headers): string {
+  const extendedHeaders = headers as Headers & { getSetCookie?: () => string[] }
+  const cookieValues = extendedHeaders.getSetCookie?.() ?? [headers.get('set-cookie') ?? '']
+
+  return cookieValues
+    .map((value) => value.split(';', 1)[0]?.trim())
+    .filter(Boolean)
+    .join('; ')
+}
+
+async function resolveModernPlayerServers(
+  html: string,
+  pageResponse: Response,
+  pageUrl: string,
+  signal?: AbortSignal,
+): Promise<EpisodeDetail['servers']> {
+  const csrfToken = html.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i)?.[1]?.trim()
+  const options = parseModernPlayerOptions(html)
+
+  if (!csrfToken || options.length === 0) {
+    return []
+  }
+
+  const cookieHeader = buildCookieHeader(pageResponse.headers)
+  const results = await Promise.allSettled(
+    options.map(async (option) => {
+      const response = await fetch(`${SERIES_DONGHUA_BASE_URL}/api/player/get-server`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-TOKEN': csrfToken,
+          'X-Requested-With': 'XMLHttpRequest',
+          Origin: SERIES_DONGHUA_BASE_URL,
+          Referer: pageUrl,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        },
+        body: JSON.stringify({
+          video_id: option.videoId,
+          server_index: option.serverIndex,
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        throw new ApiError(`SeriesDonghua rechazo el servidor ${option.name}.`, response.status)
+      }
+
+      const payload = (await response.json()) as { success?: boolean; embed_url?: string }
+      const embed = payload.embed_url?.trim()
+
+      if (!payload.success || !embed) {
+        throw new ApiError(`SeriesDonghua no devolvio el servidor ${option.name}.`, 502)
+      }
+
+      return { name: option.name, embed, download: embed }
+    }),
+  )
+
+  return results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+}
+
 function toEmbeddedVideoUrl(platform: string, value: string): string {
   if (platform === 'asura') {
-    return `https://www.dailymotion.com/embed/video/${value}`
+    const playerUrl = new URL('https://geo.dailymotion.com/player.html')
+    playerUrl.searchParams.set('video', value)
+    return playerUrl.toString()
   }
 
   return value
@@ -227,6 +331,32 @@ function parseSeriesTitleFromEpisodeHtml(html: string, fallbackSlug: string): st
 }
 
 function parseSummaryCards(html: string): AnimeSummary[] {
+  const modernMedia = extractCardBlocks(html).flatMap((card) => {
+    const anchorTag = card.match(/<a\b[^>]*href=["'][^"']+["'][^>]*>/i)?.[0] ?? ''
+    const href = readAttribute(anchorTag, 'href')
+    const imageTag = card.match(/<img\b[^>]*>/i)?.[0] ?? ''
+    const image = readAttribute(imageTag, 'src')
+    const title = normalizeText(card.match(/<h3\b[^>]*class=["'][^"']*card-title[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i)?.[1] ?? '')
+
+    if (!href || /-episodio-\d+(?:\.\d+)?\/?$/i.test(href) || !image || !title) {
+      return []
+    }
+
+    const url = toAbsoluteUrl(href)
+    return [{
+      title,
+      slug: extractSlug(url),
+      type: 'donghua',
+      cover: toAbsoluteUrl(image),
+      rating: 'SeriesDonghua',
+      url,
+    } satisfies AnimeSummary]
+  })
+
+  if (modernMedia.length > 0) {
+    return modernMedia
+  }
+
   const cardPattern =
     /<div class="item col-lg-3 col-md-3 col-xs-6">\s*<a href="([^"]+)" class="angled-img">[\s\S]*?<img src="([^"]+)"[^>]*>[\s\S]*?<div class="badge show [^"]*">([\s\S]*?)<\/div>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/g
 
@@ -295,6 +425,34 @@ function extractAnimeSlugFromEpisodeSlug(value: string): string {
 
 function parseEpisodeLinksFromDetailHtml(html: string): AnimeEpisodeLink[] {
   const episodeMap = new Map<number, AnimeEpisodeLink>()
+
+  for (const card of extractCardBlocks(html, 'episode-card-item')) {
+    const articleTag = card.match(/<article\b[^>]*>/i)?.[0] ?? ''
+    const anchorTag = card.match(/<a\b[^>]*href=["'][^"']+["'][^>]*>/i)?.[0] ?? ''
+    const href = readAttribute(anchorTag, 'href')
+    const url = href ? toAbsoluteUrl(href) : ''
+    const episodeSlug = extractSlug(url)
+    const number =
+      extractFirstNumber(readAttribute(articleTag, 'data-ep')) ??
+      extractEpisodeNumber(episodeSlug) ??
+      extractEpisodeNumber(card)
+
+    if (!number || !episodeSlug || episodeMap.has(number)) {
+      continue
+    }
+
+    episodeMap.set(number, {
+      number,
+      slug: episodeSlug,
+      routeParam: episodeSlug,
+      url,
+    })
+  }
+
+  if (episodeMap.size > 0) {
+    return sortEpisodes([...episodeMap.values()])
+  }
+
   const episodesBlock = html.match(/<ul class="donghua-list">([\s\S]*?)<\/ul>/i)?.[1] ?? ''
 
   for (const match of episodesBlock.matchAll(/<a href="([^"]+)"[^>]*>[\s\S]*?<blockquote[^>]*>([\s\S]*?)<\/blockquote>/g)) {
@@ -321,6 +479,38 @@ function parseEpisodeLinksFromDetailHtml(html: string): AnimeEpisodeLink[] {
 function parseRecentEpisodeCards(html: string): EpisodeSummary[] {
   const episodes: EpisodeSummary[] = []
   const seen = new Set<string>()
+
+  for (const card of extractCardBlocks(html)) {
+    const anchorTag = card.match(/<a\b[^>]*href=["'][^"']+["'][^>]*>/i)?.[0] ?? ''
+    const href = readAttribute(anchorTag, 'href')
+    const episodeSlug = extractSlug(href)
+    const number = extractEpisodeNumber(episodeSlug) ?? extractEpisodeNumber(card)
+    const animeSlug = extractAnimeSlugFromEpisodeSlug(episodeSlug)
+    const rawTitle = card.match(/<h3\b[^>]*class=["'][^"']*card-title[^"']*["'][^>]*>([\s\S]*?)<\/h3>/i)?.[1] ?? ''
+    const title = cleanRecentEpisodeTitle(rawTitle)
+    const imageTag = card.match(/<img\b[^>]*>/i)?.[0] ?? ''
+    const image = readAttribute(imageTag, 'src')
+
+    if (!episodeSlug || !animeSlug || !title || !number || seen.has(episodeSlug)) {
+      continue
+    }
+
+    episodes.push({
+      title,
+      animeSlug,
+      episodeSlug,
+      number,
+      routeParam: episodeSlug,
+      cover: image ? toAbsoluteUrl(image) : undefined,
+      url: toAbsoluteUrl(href),
+    })
+    seen.add(episodeSlug)
+  }
+
+  if (episodes.length > 0) {
+    return episodes
+  }
+
   const primaryPattern =
     /<a href="([^"]*?-episodio-(\d+(?:\.\d+)?)[^"]*)"[^>]*class="angled-img"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h5[^>]*>([\s\S]*?)<\/h5>/gi
 
@@ -381,7 +571,7 @@ function parseRecentEpisodeCards(html: string): EpisodeSummary[] {
 }
 
 export async function getSeriesDonghuaRecentEpisodes(signal?: AbortSignal): Promise<EpisodeSummary[]> {
-  const response = await requestText(SERIES_DONGHUA_BASE_URL, signal)
+  const response = await requestText(SERIES_DONGHUA_RECENT_URL, signal)
   return parseRecentEpisodeCards(response.bodyText).slice(0, 18)
 }
 export async function getSeriesDonghuaPreview(signal?: AbortSignal): Promise<AnimeSummary[]> {
@@ -432,6 +622,7 @@ export async function getSeriesDonghuaDetail(
   const html = response.bodyText
 
   const title =
+    normalizeText(html.match(/<h1\b[^>]*class=["'][^"']*hero-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? '') ||
     normalizeText(html.match(/<div class="sf fc-dark ls-title-serie">([\s\S]*?)<\/div>/i)?.[1] ?? '') ||
     normalizeText(html.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? '')
 
@@ -440,12 +631,15 @@ export async function getSeriesDonghuaDetail(
   }
 
   const status = normalizeText(
-    html.match(/Estado:\s*<\/div>[\s\S]*?<span class="badge bg-default">([\s\S]*?)<\/span>/i)?.[1] ??
+    html.match(/class=["'][^"']*badge-status-([^"']+)["'][^>]*>([\s\S]*?)<\/span>/i)?.[2] ??
+      html.match(/Estado:\s*<\/div>[\s\S]*?<span class="badge bg-default">([\s\S]*?)<\/span>/i)?.[1] ??
       '',
   )
 
   const synopsis = normalizeText(
-    html.match(/Sinopsis<\/div>[\s\S]*?<div class="text-justify fc-dark">([\s\S]*?)<\/div>/i)?.[1] ?? '',
+    html.match(/<h2[^>]*>[\s\S]*?Sinopsis[\s\S]*?<\/h2>[\s\S]*?<div[^>]*>([\s\S]*?)<\/div>/i)?.[1] ??
+      html.match(/Sinopsis<\/div>[\s\S]*?<div class="text-justify fc-dark">([\s\S]*?)<\/div>/i)?.[1] ??
+      '',
   )
 
   const genres = Array.from(
@@ -524,28 +718,31 @@ export async function getSeriesDonghuaEpisode(
   const html = response.bodyText
   const platformLabels = parsePlatformLabels(html)
   const unpackedScript = unpackPlayerScript(html)
+  let servers: EpisodeDetail['servers'] = []
 
-  if (!unpackedScript) {
-    throw new ApiError('No pude extraer los servidores del donghua.', 502)
+  if (unpackedScript) {
+    const videoMap = parseVideoMap(unpackedScript)
+    servers = [...platformLabels.entries()]
+      .map(([platform, name]) => {
+        const source = videoMap[platform]
+        if (!source) {
+          return null
+        }
+
+        const embedTarget = toEmbeddedVideoUrl(platform, source)
+
+        return {
+          name,
+          embed: embedTarget,
+          download: embedTarget,
+        }
+      })
+      .filter((server): server is NonNullable<typeof server> => Boolean(server))
   }
 
-  const videoMap = parseVideoMap(unpackedScript)
-  const servers = [...platformLabels.entries()]
-    .map(([platform, name]) => {
-      const source = videoMap[platform]
-      if (!source) {
-        return null
-      }
-
-      const embedTarget = toEmbeddedVideoUrl(platform, source)
-
-      return {
-        name,
-        embed: embedTarget,
-        download: embedTarget,
-      }
-    })
-    .filter((server): server is NonNullable<typeof server> => Boolean(server))
+  if (servers.length === 0) {
+    servers = await resolveModernPlayerServers(html, response, response.url, signal)
+  }
 
   if (servers.length === 0) {
     throw new ApiError('SeriesDonghua no devolvio servidores para este episodio.', 502)
